@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDMI Vision — Capture</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0b0d; color: #e8e8ea; font-family: -apple-system, system-ui, sans-serif; }
+  #toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 10px 14px; background: #17171a; border-bottom: 1px solid #2a2a2e;
+  }
+  select, button {
+    background: #232327; color: #e8e8ea; border: 1px solid #3a3a3f; border-radius: 6px;
+    padding: 6px 10px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #2c2c31; }
+  button.active { background: #2f6f3e; border-color: #3f8f4f; }
+  #status { padding: 3px 8px; border-radius: 4px; font-size: 13px; }
+  #status.ok { background: #1e4b26; color: #9be0a6; }
+  #status.progress { background: #4b3d1e; color: #e0c99b; }
+  #status.error { background: #4b1e1e; color: #e09b9b; }
+  #status.idle { background: #2a2a2e; color: #9a9aa0; }
+  #tokens, #countdown { font-size: 13px; color: #9a9aa0; }
+  #stage { position: relative; width: 100%; height: calc(100% - 52px); background: #000; display: flex; align-items: center; justify-content: center; }
+  video { max-width: 100%; max-height: 100%; }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <select id="deviceSelect"></select>
+    <button id="fullscreenBtn">Schermo intero</button>
+    <button id="toggleBtn">Avvia analisi</button>
+    <span id="countdown">—</span>
+    <span id="status" class="idle">inattivo</span>
+    <span id="tokens"></span>
+  </div>
+  <div id="stage">
+    <video id="video" autoplay playsinline muted></video>
+  </div>
+  <canvas id="canvas" hidden></canvas>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const deviceSelect = document.getElementById("deviceSelect");
+    const fullscreenBtn = document.getElementById("fullscreenBtn");
+    const toggleBtn = document.getElementById("toggleBtn");
+    const countdownEl = document.getElementById("countdown");
+    const statusEl = document.getElementById("status");
+    const tokensEl = document.getElementById("tokens");
+
+    let clientConfig = { intervalSec: 30, imageMaxWidth: 1280, jpegQuality: 0.7 };
+    let analyzing = false;
+    let countdownValue = 0;
+    let countdownTimer = null;
+    let inFlight = false;
+
+    function setStatus(kind, text) {
+      statusEl.className = kind;
+      statusEl.textContent = text;
+    }
+
+    async function loadClientConfig() {
+      try {
+        const res = await fetch("/api/client-config");
+        clientConfig = await res.json();
+      } catch (e) {
+        console.error("Impossibile caricare la config client", e);
+      }
+    }
+
+    function connectEvents() {
+      const es = new EventSource("/api/events");
+      es.addEventListener("config", (ev) => {
+        const data = JSON.parse(ev.data);
+        clientConfig = { ...clientConfig, ...data };
+        if (analyzing) resetCountdown();
+      });
+    }
+
+    // --- Dispositivi ---
+    async function populateDevices() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === "videoinput");
+      deviceSelect.innerHTML = "";
+      for (const d of videoInputs) {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `Camera ${deviceSelect.length + 1}`;
+        deviceSelect.appendChild(opt);
+      }
+      let saved = null;
+      try { saved = localStorage.getItem("hdmiVision.deviceId"); } catch (e) {}
+      if (saved && videoInputs.some((d) => d.deviceId === saved)) {
+        deviceSelect.value = saved;
+      }
+    }
+
+    async function startStream(deviceId) {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach((t) => t.stop());
+      }
+      const constraints = {
+        video: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          width: 1920,
+          height: 1080,
+        },
+        audio: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      // Dopo il primo getUserMedia le label dei device sono disponibili: ripopola.
+      await populateDevices();
+    }
+
+    deviceSelect.addEventListener("change", async () => {
+      try { localStorage.setItem("hdmiVision.deviceId", deviceSelect.value); } catch (e) {}
+      try {
+        await startStream(deviceSelect.value);
+      } catch (e) {
+        setStatus("error", "errore camera");
+      }
+    });
+
+    fullscreenBtn.addEventListener("click", () => {
+      if (video.requestFullscreen) video.requestFullscreen();
+    });
+
+    // --- Cattura frame ---
+    function captureFrameBase64() {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) return null;
+      const scale = Math.min(1, clientConfig.imageMaxWidth / vw);
+      canvas.width = Math.round(vw * scale);
+      canvas.height = Math.round(vh * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", clientConfig.jpegQuality);
+      return dataUrl.split(",")[1];
+    }
+
+    async function sendFrame() {
+      if (inFlight) return;
+      const image = captureFrameBase64();
+      if (!image) return;
+      inFlight = true;
+      setStatus("progress", "in corso");
+      try {
+        const res = await fetch("/api/frame", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image }),
+        });
+        if (res.status === 409) {
+          setStatus("ok", "ok"); // elaborazione precedente ancora attiva, salta
+          return;
+        }
+        const data = await res.json();
+        if (data.error) {
+          setStatus("error", "errore: " + data.error);
+        } else {
+          setStatus("ok", "ok");
+          if (data.usage) {
+            tokensEl.textContent = `token: in ${data.usage.input_tokens} / out ${data.usage.output_tokens}`;
+          }
+        }
+      } catch (e) {
+        setStatus("error", "errore di rete");
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    // --- Countdown / loop analisi ---
+    function resetCountdown() {
+      countdownValue = clientConfig.intervalSec;
+    }
+
+    function tick() {
+      if (!analyzing) return;
+      countdownValue -= 1;
+      if (countdownValue <= 0) {
+        sendFrame();
+        resetCountdown();
+      }
+      countdownEl.textContent = `prossimo frame: ${countdownValue}s`;
+    }
+
+    function startAnalysis() {
+      analyzing = true;
+      toggleBtn.textContent = "Ferma analisi";
+      toggleBtn.classList.add("active");
+      sendFrame();
+      resetCountdown();
+      countdownTimer = setInterval(tick, 1000);
+    }
+
+    function stopAnalysis() {
+      analyzing = false;
+      toggleBtn.textContent = "Avvia analisi";
+      toggleBtn.classList.remove("active");
+      countdownEl.textContent = "—";
+      setStatus("idle", "inattivo");
+      if (countdownTimer) clearInterval(countdownTimer);
+    }
+
+    toggleBtn.addEventListener("click", () => {
+      if (analyzing) stopAnalysis(); else startAnalysis();
+    });
+
+    // --- Avvio ---
+    (async function init() {
+      await loadClientConfig();
+      connectEvents();
+      try {
+        let saved = null;
+        try { saved = localStorage.getItem("hdmiVision.deviceId"); } catch (e) {}
+        await startStream(saved || undefined);
+      } catch (e) {
+        setStatus("error", "accesso alla camera negato");
+      }
+    })();
+  </script>
+</body>
+</html>
