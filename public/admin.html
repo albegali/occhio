@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDMI Vision — Admin</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0b0b0d; color: #e8e8ea; font-family: -apple-system, system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 30px 20px 60px; }
+  h1 { font-size: 1.4rem; margin-bottom: 24px; }
+  label { display: block; font-size: 13px; color: #9a9aa0; margin: 18px 0 6px; }
+  input, textarea {
+    width: 100%; background: #17171a; color: #e8e8ea; border: 1px solid #3a3a3f;
+    border-radius: 6px; padding: 8px 10px; font-size: 14px; font-family: inherit;
+  }
+  textarea { min-height: 110px; resize: vertical; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+  .actions { display: flex; gap: 10px; margin-top: 28px; }
+  button {
+    background: #232327; color: #e8e8ea; border: 1px solid #3a3a3f; border-radius: 6px;
+    padding: 10px 16px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #2c2c31; }
+  #saveBtn { background: #2f6f3e; border-color: #3f8f4f; }
+  #saveBtn:hover { background: #368047; }
+  #msg { margin-top: 16px; font-size: 14px; min-height: 20px; }
+  #msg.ok { color: #9be0a6; }
+  #msg.error { color: #e09b9b; }
+</style>
+</head>
+<body>
+<main>
+  <h1>HDMI Vision — Configurazione</h1>
+  <form id="form">
+    <label for="systemPrompt">System prompt</label>
+    <textarea id="systemPrompt"></textarea>
+
+    <label for="defaultPrompt">Prompt di default</label>
+    <textarea id="defaultPrompt"></textarea>
+
+    <div class="row">
+      <div>
+        <label for="model">Modello</label>
+        <input id="model" type="text">
+      </div>
+      <div>
+        <label for="maxTokens">Max token output (50–4000)</label>
+        <input id="maxTokens" type="number" min="50" max="4000" step="1">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="intervalSec">Intervallo (s) (5–3600)</label>
+        <input id="intervalSec" type="number" min="5" max="3600" step="1">
+      </div>
+      <div>
+        <label for="imageMaxWidth">Larghezza immagine (px) (320–1920)</label>
+        <input id="imageMaxWidth" type="number" min="320" max="1920" step="1">
+      </div>
+      <div>
+        <label for="jpegQuality">Qualità JPEG (0.3–0.95)</label>
+        <input id="jpegQuality" type="number" min="0.3" max="0.95" step="0.05">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" id="saveBtn">Salva</button>
+      <button type="button" id="resetBtn">Ripristina default</button>
+    </div>
+    <div id="msg"></div>
+  </form>
+</main>
+
+<script>
+  // Valori di default: rispecchiano config.default.json (nessun endpoint dedicato, MVP).
+  const DEFAULTS = {
+    systemPrompt: "Sei un assistente che analizza schermate provenienti da una sorgente video HDMI. Rispondi in italiano, in modo conciso.",
+    defaultPrompt: "Descrivi cosa si vede in questa schermata e segnala eventuali cambiamenti rilevanti.",
+    model: "claude-haiku-4-5-20251001",
+    maxTokens: 400,
+    intervalSec: 30,
+    imageMaxWidth: 1280,
+    jpegQuality: 0.7,
+  };
+
+  const form = document.getElementById("form");
+  const msgEl = document.getElementById("msg");
+  const fields = ["systemPrompt", "defaultPrompt", "model", "maxTokens", "intervalSec", "imageMaxWidth", "jpegQuality"];
+
+  function fill(cfg) {
+    for (const f of fields) document.getElementById(f).value = cfg[f];
+  }
+
+  function readForm() {
+    return {
+      systemPrompt: document.getElementById("systemPrompt").value,
+      defaultPrompt: document.getElementById("defaultPrompt").value,
+      model: document.getElementById("model").value,
+      maxTokens: Number(document.getElementById("maxTokens").value),
+      intervalSec: Number(document.getElementById("intervalSec").value),
+      imageMaxWidth: Number(document.getElementById("imageMaxWidth").value),
+      jpegQuality: Number(document.getElementById("jpegQuality").value),
+    };
+  }
+
+  function showMsg(text, ok) {
+    msgEl.textContent = text;
+    msgEl.className = ok ? "ok" : "error";
+  }
+
+  async function load() {
+    const res = await fetch("/api/config");
+    const cfg = await res.json();
+    fill(cfg);
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!confirm("Salvare le modifiche alla configurazione?")) return;
+    const body = readForm();
+    try {
+      const res = await fetch("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showMsg("Errore: " + (data.errors || []).join(", "), false);
+      } else {
+        showMsg("Configurazione salvata.", true);
+      }
+    } catch (e) {
+      showMsg("Errore di rete durante il salvataggio.", false);
+    }
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", () => {
+    fill(DEFAULTS);
+    showMsg("Valori di default caricati nel form. Premi Salva per confermare.", true);
+  });
+
+  load();
+</script>
+</body>
+</html>
