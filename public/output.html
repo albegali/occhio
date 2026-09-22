@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDMI Vision — Output</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0b0d; color: #f0f0f2; font-family: -apple-system, system-ui, sans-serif; }
+  #bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px; background: #17171a; border-bottom: 1px solid #2a2a2e;
+    font-size: 16px;
+  }
+  #live { padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 14px; }
+  #live.on { background: #1e4b26; color: #9be0a6; }
+  #live.off { background: #4b1e1e; color: #e09b9b; }
+  #ts { color: #9a9aa0; }
+  #content {
+    padding: 30px 40px;
+    font-size: 2rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  #content.error { color: #e09b9b; }
+  #content.empty { color: #6a6a70; font-style: italic; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <span id="live" class="off">disconnesso</span>
+    <span id="ts"></span>
+  </div>
+  <div id="content" class="empty">In attesa del primo risultato…</div>
+
+  <script>
+    const liveEl = document.getElementById("live");
+    const tsEl = document.getElementById("ts");
+    const contentEl = document.getElementById("content");
+
+    function render(result) {
+      if (!result) return;
+      contentEl.classList.remove("empty", "error");
+      if (result.error) {
+        contentEl.classList.add("error");
+        contentEl.textContent = "Errore: " + result.error;
+      } else {
+        contentEl.textContent = result.text || "";
+      }
+      const d = new Date(result.ts);
+      tsEl.textContent = "Ultimo aggiornamento: " + d.toLocaleTimeString("it-IT");
+    }
+
+    function setLive(on) {
+      liveEl.textContent = on ? "live" : "disconnesso";
+      liveEl.className = on ? "on" : "off";
+    }
+
+    // Stato iniziale, in attesa che si apra la connessione SSE
+    fetch("/api/latest").then((r) => r.json()).then(render).catch(() => {});
+
+    function connect() {
+      const es = new EventSource("/api/events");
+      es.onopen = () => setLive(true);
+      es.onerror = () => setLive(false); // EventSource riprova la connessione automaticamente
+      es.addEventListener("result", (ev) => render(JSON.parse(ev.data)));
+    }
+    connect();
+  </script>
+</body>
+</html>
