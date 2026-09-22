@@ -1,0 +1,9 @@
+{
+  "systemPrompt": "Sei un assistente che analizza schermate provenienti da una sorgente video HDMI. Rispondi in italiano, in modo conciso.",
+  "defaultPrompt": "Descrivi cosa si vede in questa schermata e segnala eventuali cambiamenti rilevanti.",
+  "model": "claude-haiku-4-5-20251001",
+  "maxTokens": 400,
+  "intervalSec": 30,
+  "imageMaxWidth": 1280,
+  "jpegQuality": 0.7
+}
