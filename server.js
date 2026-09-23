@@ -131,6 +131,15 @@ app.get("/api/events", (req, res) => {
   req.on("close", () => sseClients.delete(res));
 });
 
+const DUPLICATE = "DUPLICATO";
+// Testo delle ultime analisi valide, per far scartare a Claude le domande già viste
+function dedupeInstructions() {
+  const prev = results.filter((r) => !r.error).slice(-3);
+  if (!prev.length) return "";
+  const list = prev.map((r, i) => `--- Analisi ${i + 1} ---\n${r.text}`).join("\n");
+  return `\n\nAnalisi già fatte sulle schermate precedenti:\n${list}\n\nSe questa schermata mostra la stessa domanda o lo stesso contenuto già analizzato sopra, rispondi solo con la parola ${DUPLICATE} e nient'altro.`;
+}
+
 let busy = false;
 app.post("/api/frame", requireLoopback, async (req, res) => {
   if (busy) return res.status(409).send("Elaborazione già in corso");
@@ -150,7 +159,7 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: config.defaultPrompt },
+            { type: "text", text: config.defaultPrompt + dedupeInstructions() },
           ],
         },
       ],
@@ -159,7 +168,9 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
     if (response.stop_reason === "max_tokens") result.truncated = true;
     result.usage = { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens };
     const durationMs = Date.now() - startedAt;
-    console.log(`frame ts=${result.ts} durata=${durationMs}ms in=${result.usage.input_tokens} out=${result.usage.output_tokens}`);
+    const duplicate = result.text.trim() === DUPLICATE;
+    console.log(`frame ts=${result.ts} durata=${durationMs}ms in=${result.usage.input_tokens} out=${result.usage.output_tokens}${duplicate ? " duplicato" : ""}`);
+    if (duplicate) return res.json({ ...result, duplicate: true });
     pushResult(result);
     broadcast("result", result);
     res.json(result);

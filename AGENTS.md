@@ -72,7 +72,8 @@ Evento SSE `result`: `{ id, ts, text, model, usage: { input_tokens, output_token
 4. **Protezione dei costi**: `/api/frame` accetta solo richieste da `127.0.0.1` / `::1` / `::ffff:127.0.0.1`; altrimenti `403`. Limite body JSON 5 MB.
 5. **Errori**: un errore dell'API non fa crashare il server; viene trasmesso come evento `result` con campo `error` e mostrato in entrambe le pagine.
 6. **Cronologia**: il server tiene in memoria solo gli ultimi 10 risultati (`GET /api/latest` restituisce l'ultimo). Nessuna persistenza su disco dei risultati.
-7. **Config a caldo**: le modifiche dall'admin valgono dalla chiamata successiva, senza riavvio. Il client Capture, ricevendo l'evento SSE `config`, riallinea l'intervallo.
+7. **Domande già analizzate**: al prompt si aggiunge il testo delle ultime 3 analisi valide. Se Claude risponde `DUPLICATO`, il risultato non viene salvato né trasmesso via SSE; `/api/frame` risponde con `duplicate: true`.
+8. **Config a caldo**: le modifiche dall'admin valgono dalla chiamata successiva, senza riavvio. Il client Capture, ricevendo l'evento SSE `config`, riallinea l'intervallo.
 
 ## Requisiti UI
 

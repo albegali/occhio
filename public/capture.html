@@ -176,7 +176,7 @@
         if (data.error) {
           setStatus("error", "errore: " + data.error);
         } else {
-          setStatus("ok", "ok");
+          setStatus("ok", data.duplicate ? "ok (già analizzata, saltata)" : "ok");
           if (data.usage) {
             tokensEl.textContent = `token: in ${data.usage.input_tokens} / out ${data.usage.output_tokens}`;
           }
