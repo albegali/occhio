@@ -7,8 +7,9 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: #0b0b0d; color: #f0f0f2; font-family: -apple-system, system-ui, sans-serif; }
+  html, body { margin: 0; background: #0b0b0d; color: #f0f0f2; font-family: -apple-system, system-ui, sans-serif; }
   #bar {
+    position: sticky; top: 0; z-index: 1;
     display: flex; align-items: center; gap: 12px;
     padding: 14px 20px; background: #17171a; border-bottom: 1px solid #2a2a2e;
     font-size: 16px;
@@ -17,15 +18,18 @@
   #live.on { background: #1e4b26; color: #9be0a6; }
   #live.off { background: #4b1e1e; color: #e09b9b; }
   #ts { color: #9a9aa0; }
-  #content {
-    padding: 30px 40px;
-    font-size: 2rem;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
+  #feed { padding: 20px 40px 80px; }
+  #empty { color: #6a6a70; font-style: italic; font-size: 2rem; padding: 10px 0; }
+  .item { border-bottom: 1px solid #2a2a2e; padding: 24px 0; }
+  .item time { display: block; color: #9a9aa0; font-size: 1rem; margin-bottom: 8px; }
+  .item .text { font-size: 2rem; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .item.error .text { color: #e09b9b; }
+  .item .trunc { color: #e0c89b; font-size: 1rem; margin-top: 8px; }
+  #newBtn {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    padding: 12px 22px; border: 0; border-radius: 24px; background: #3a6df0; color: #fff;
+    font-size: 18px; font-weight: 600; cursor: pointer;
   }
-  #content.error { color: #e09b9b; }
-  #content.empty { color: #6a6a70; font-style: italic; }
 </style>
 </head>
 <body>
@@ -33,41 +37,71 @@
     <span id="live" class="off">disconnesso</span>
     <span id="ts"></span>
   </div>
-  <div id="content" class="empty">In attesa del primo risultato…</div>
+  <div id="feed"><div id="empty">In attesa del primo risultato…</div></div>
+  <button id="newBtn" hidden></button>
 
   <script>
+    const MAX_ITEMS = 200;
     const liveEl = document.getElementById("live");
     const tsEl = document.getElementById("ts");
-    const contentEl = document.getElementById("content");
+    const feedEl = document.getElementById("feed");
+    const newBtn = document.getElementById("newBtn");
+    const seen = new Set();
+    let unread = 0;
 
-    function render(result) {
-      if (!result) return;
-      contentEl.classList.remove("empty", "error");
-      if (result.error) {
-        contentEl.classList.add("error");
-        contentEl.textContent = "Errore: " + result.error;
-      } else {
-        contentEl.textContent = result.text || "";
-      }
-      const d = new Date(result.ts);
-      tsEl.textContent = "Ultimo aggiornamento: " + d.toLocaleTimeString("it-IT");
+    const nearBottom = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 80;
+    const scrollToBottom = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+
+    function updateNewBtn() {
+      newBtn.hidden = unread === 0;
+      newBtn.textContent = unread === 1 ? "1 nuovo ↓" : unread + " nuovi ↓";
     }
+
+    function append(result) {
+      // alla riconnessione il server rimanda la cronologia: scarta i duplicati
+      if (!result || seen.has(result.id)) return;
+      seen.add(result.id);
+      // decide prima di aggiungere, altrimenti il nuovo contenuto sposta il fondo
+      const follow = nearBottom();
+
+      document.getElementById("empty")?.remove();
+      const item = document.createElement("div");
+      item.className = "item" + (result.error ? " error" : "");
+      const time = document.createElement("time");
+      time.textContent = new Date(result.ts).toLocaleTimeString("it-IT");
+      const text = document.createElement("div");
+      text.className = "text";
+      text.textContent = result.error ? "Errore: " + result.error : result.text || "";
+      item.append(time, text);
+      if (result.truncated) {
+        const t = document.createElement("div");
+        t.className = "trunc";
+        t.textContent = "⚠ Risposta troncata (limite maxTokens raggiunto)";
+        item.append(t);
+      }
+      feedEl.append(item);
+      while (feedEl.children.length > MAX_ITEMS) feedEl.firstElementChild.remove();
+
+      tsEl.textContent = "Ultimo aggiornamento: " + time.textContent;
+      if (follow) scrollToBottom();
+      else { unread++; updateNewBtn(); }
+    }
+
+    window.addEventListener("scroll", () => {
+      if (unread && nearBottom()) { unread = 0; updateNewBtn(); }
+    });
+    newBtn.addEventListener("click", () => { unread = 0; updateNewBtn(); scrollToBottom(); });
 
     function setLive(on) {
       liveEl.textContent = on ? "live" : "disconnesso";
       liveEl.className = on ? "on" : "off";
     }
 
-    // Stato iniziale, in attesa che si apra la connessione SSE
-    fetch("/api/latest").then((r) => r.json()).then(render).catch(() => {});
-
-    function connect() {
-      const es = new EventSource("/api/events");
-      es.onopen = () => setLive(true);
-      es.onerror = () => setLive(false); // EventSource riprova la connessione automaticamente
-      es.addEventListener("result", (ev) => render(JSON.parse(ev.data)));
-    }
-    connect();
+    // all'apertura il server invia gli ultimi risultati in memoria, poi quelli nuovi
+    const es = new EventSource("/api/events");
+    es.onopen = () => setLive(true);
+    es.onerror = () => setLive(false); // EventSource riprova la connessione automaticamente
+    es.addEventListener("result", (ev) => append(JSON.parse(ev.data)));
   </script>
 </body>
 </html>

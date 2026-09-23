@@ -127,8 +127,7 @@ app.get("/api/events", (req, res) => {
   });
   res.flushHeaders?.();
   sseClients.add(res);
-  const latest = latestResult();
-  if (latest) sseSend(res, "result", latest);
+  for (const r of results) sseSend(res, "result", r);
   req.on("close", () => sseClients.delete(res));
 });
 
@@ -157,6 +156,7 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
       ],
     });
     result.text = response.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    if (response.stop_reason === "max_tokens") result.truncated = true;
     result.usage = { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens };
     const durationMs = Date.now() - startedAt;
     console.log(`frame ts=${result.ts} durata=${durationMs}ms in=${result.usage.input_tokens} out=${result.usage.output_tokens}`);

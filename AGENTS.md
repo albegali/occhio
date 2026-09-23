@@ -57,12 +57,12 @@ Variabili d'ambiente (`.env`): `ANTHROPIC_API_KEY` (obbligatoria), `ADMIN_PASSWO
 | GET | `/admin` | Basic Auth | `admin.html` |
 | GET | `/api/client-config` | pubblico | `{ intervalSec, imageMaxWidth, jpegQuality }` |
 | POST | `/api/frame` | **solo loopback** | body `{ image: "<base64 jpeg senza prefisso>" }` → chiama Claude, risponde con il risultato e lo trasmette via SSE |
-| GET | `/api/events` | pubblico | stream SSE; all'apertura invia subito l'ultimo risultato |
+| GET | `/api/events` | pubblico | stream SSE; all'apertura invia subito gli ultimi risultati in memoria (max 10) |
 | GET | `/api/latest` | pubblico | ultimo risultato (o `null`) |
 | GET | `/api/config` | Basic Auth | config completa |
 | PUT | `/api/config` | Basic Auth | aggiorna e salva `config.json`, invia evento SSE `config` |
 
-Evento SSE `result`: `{ id, ts, text, model, usage: { input_tokens, output_tokens }, error? }`.
+Evento SSE `result`: `{ id, ts, text, model, usage: { input_tokens, output_tokens }, truncated?, error? }`. `truncated` è `true` se la risposta si è fermata per `maxTokens`.
 
 ## Comportamenti obbligatori
 
