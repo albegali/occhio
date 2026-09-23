@@ -31,6 +31,7 @@
 <body>
   <div id="toolbar">
     <select id="deviceSelect"></select>
+    <button id="reloadBtn" title="Se l'immagine si blocca o diventa un colore pieno dopo un cambio di risoluzione della sorgente, riacquisisce lo stream">Riavvia stream</button>
     <button id="fullscreenBtn">Schermo intero</button>
     <button id="toggleBtn">Avvia analisi</button>
     <span id="countdown">—</span>
@@ -46,6 +47,7 @@
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const deviceSelect = document.getElementById("deviceSelect");
+    const reloadBtn = document.getElementById("reloadBtn");
     const fullscreenBtn = document.getElementById("fullscreenBtn");
     const toggleBtn = document.getElementById("toggleBtn");
     const countdownEl = document.getElementById("countdown");
@@ -106,8 +108,8 @@
       const constraints = {
         video: {
           deviceId: deviceId ? { exact: deviceId } : undefined,
-          width: 1920,
-          height: 1080,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
         },
         audio: false,
       };
@@ -128,6 +130,17 @@
 
     fullscreenBtn.addEventListener("click", () => {
       if (video.requestFullscreen) video.requestFullscreen();
+    });
+
+    // Riacquisisce lo stream: utile se il segnale sorgente cambia risoluzione/refresh
+    // (es. dopo un login) e il browser resta agganciato al vecchio formato mostrando
+    // un frame bloccato o a colore pieno.
+    reloadBtn.addEventListener("click", async () => {
+      try {
+        await startStream(deviceSelect.value || undefined);
+      } catch (e) {
+        setStatus("error", "errore riavvio camera");
+      }
     });
 
     // --- Cattura frame ---
