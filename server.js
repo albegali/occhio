@@ -131,14 +131,48 @@ app.get("/api/events", (req, res) => {
   req.on("close", () => sseClients.delete(res));
 });
 
-const DUPLICATE = "DUPLICATO";
-// Testo delle ultime analisi valide, per far scartare a Claude le domande già viste
-function dedupeInstructions() {
-  const prev = results.filter((r) => !r.error).slice(-3);
-  if (!prev.length) return "";
-  const list = prev.map((r, i) => `--- Analisi ${i + 1} ---\n${r.text}`).join("\n");
-  return `\n\nAnalisi già fatte sulle schermate precedenti:\n${list}\n\nSe questa schermata mostra la stessa domanda o lo stesso contenuto già analizzato sopra, rispondi solo con la parola ${DUPLICATE} e nient'altro.`;
+// Blocchi (es. domande) già elaborati nella sessione di analisi corrente:
+// quando si scrolla, quelli ancora visibili non vanno rielaborati né mostrati di nuovo
+const seenBlocks = new Map(); // chiave normalizzata -> chiave originale
+const normKey = (k) => String(k).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+const BLOCKS_FORMAT = {
+  type: "json_schema",
+  schema: {
+    type: "object",
+    properties: {
+      blocks: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { key: { type: "string" }, text: { type: "string" } },
+          required: ["key", "text"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["blocks"],
+    additionalProperties: false,
+  },
+};
+
+function blockInstructions() {
+  const seen = [...seenBlocks.values()];
+  return (
+    "\n\nLa schermata può mostrare solo una parte di un contenuto più lungo che viene scrollato. " +
+    "Dividi il contenuto in blocchi logici (es. una domanda con tutte le sue opzioni). " +
+    "Elabora SOLO i blocchi visibili per intero: ignora quelli tagliati in alto o in basso, verranno elaborati quando saranno interamente visibili. " +
+    'Per ogni blocco restituisci "key", un identificativo stabile (solo il numero della domanda se presente, es. "3", altrimenti le prime 6 parole del blocco), ' +
+    'e "text", la tua risposta per quel blocco, che inizia con il numero o l\'etichetta del blocco.' +
+    (seen.length ? `\nBlocchi già elaborati, da NON includere: ${seen.join(" | ")}` : "")
+  );
 }
+
+// Nuova sessione di analisi: dimentica i blocchi già elaborati
+app.post("/api/reset", requireLoopback, (req, res) => {
+  seenBlocks.clear();
+  res.status(204).end();
+});
 
 let busy = false;
 app.post("/api/frame", requireLoopback, async (req, res) => {
@@ -159,18 +193,25 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: config.defaultPrompt + dedupeInstructions() },
+            { type: "text", text: config.defaultPrompt + blockInstructions() },
           ],
         },
       ],
+      output_config: { format: BLOCKS_FORMAT },
     });
-    result.text = response.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    if (response.stop_reason === "max_tokens") result.truncated = true;
+    if (response.stop_reason === "max_tokens") throw new Error("Risposta troncata: aumenta maxTokens dall'admin");
+    const raw = response.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    const fresh = JSON.parse(raw).blocks.filter((b) => {
+      const k = normKey(b.key);
+      if (!k || seenBlocks.has(k)) return false;
+      seenBlocks.set(k, b.key);
+      return true;
+    });
+    result.text = fresh.map((b) => b.text).join("\n\n");
     result.usage = { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens };
     const durationMs = Date.now() - startedAt;
-    const duplicate = result.text.trim() === DUPLICATE;
-    console.log(`frame ts=${result.ts} durata=${durationMs}ms in=${result.usage.input_tokens} out=${result.usage.output_tokens}${duplicate ? " duplicato" : ""}`);
-    if (duplicate) return res.json({ ...result, duplicate: true });
+    console.log(`frame ts=${result.ts} durata=${durationMs}ms in=${result.usage.input_tokens} out=${result.usage.output_tokens} nuovi=${fresh.length}`);
+    if (!fresh.length) return res.json({ ...result, duplicate: true });
     pushResult(result);
     broadcast("result", result);
     res.json(result);

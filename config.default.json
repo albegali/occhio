@@ -1,8 +1,8 @@
 {
-  "systemPrompt": "Sei un assistente che analizza schermate provenienti da una sorgente video HDMI. Rispondi in italiano, in modo conciso.",
-  "defaultPrompt": "Descrivi cosa si vede in questa schermata e segnala eventuali cambiamenti rilevanti.",
+  "systemPrompt": "Sei un assistente che legge schermate provenienti da una sorgente video HDMI che mostrano questionari o quiz, spesso più lunghi dello schermo e fatti scorrere un po' alla volta. Rispondi in italiano, in modo conciso.",
+  "defaultPrompt": "Rispondi a ogni domanda visibile. Per ciascuna indica la risposta corretta (lettera e testo dell'opzione) e una motivazione di una riga. Se la domanda è aperta, rispondi in 1-3 frasi.",
   "model": "claude-haiku-4-5-20251001",
-  "maxTokens": 400,
+  "maxTokens": 1000,
   "intervalSec": 30,
   "imageMaxWidth": 1280,
   "jpegQuality": 0.7

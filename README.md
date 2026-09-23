@@ -39,10 +39,10 @@ Da `/admin` (utente qualsiasi, password = `ADMIN_PASSWORD`):
 
 | Campo | Default | Note |
 |---|---|---|
-| System prompt | analisi concisa in italiano | Ruolo e regole del modello |
-| Prompt di default | descrivi la schermata | Inviato insieme a ogni frame |
+| System prompt | lettura di quiz su schermate scrollate, in italiano | Ruolo e regole del modello |
+| Prompt di default | rispondi a ogni domanda visibile | Inviato insieme a ogni frame |
 | Modello | `claude-haiku-4-5-20251001` | Il più economico; passa a `claude-sonnet-5` per analisi più ricche |
-| Max token output | 400 | Limita lunghezza e costo di ogni risposta |
+| Max token output | 1000 | Limita lunghezza e costo di ogni risposta |
 | Intervallo (s) | 30 | Tempo tra un frame e il successivo |
 | Larghezza immagine | 1280 px | Più bassa = meno token di input |
 | Qualità JPEG | 0.7 | Incide sul peso del file, non sui token |
@@ -51,7 +51,7 @@ Le modifiche valgono dalla chiamata successiva, senza riavviare.
 
 ## Consumi indicativi
 
-Un frame a 1280×720 costa circa 1.200 token di input, più prompt e risposta (max 400). A 30 secondi fanno 120 chiamate l'ora. Per ridurre i costi, abbassa la larghezza dell'immagine (960 px ≈ 700 token), accorcia i prompt o allunga l'intervallo. Ogni chiamata è indipendente: nessuna cronologia viene rimandata al modello.
+Un frame a 1280×720 costa circa 1.200 token di input, più prompt e risposta (max 1000). A 30 secondi fanno 120 chiamate l'ora. Per ridurre i costi, abbassa la larghezza dell'immagine (960 px ≈ 700 token), accorcia i prompt o allunga l'intervallo. Non si rimanda la conversazione al modello: si aggiunge solo l'elenco delle domande già elaborate, così scrollando quelle ancora visibili non vengono rielaborate.
 
 ## Sicurezza
 

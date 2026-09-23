@@ -36,10 +36,10 @@ Non creare altri file o cartelle se non strettamente necessari.
 
 ```json
 {
-  "systemPrompt": "Sei un assistente che analizza schermate provenienti da una sorgente video HDMI. Rispondi in italiano, in modo conciso.",
-  "defaultPrompt": "Descrivi cosa si vede in questa schermata e segnala eventuali cambiamenti rilevanti.",
+  "systemPrompt": "Sei un assistente che legge schermate provenienti da una sorgente video HDMI che mostrano questionari o quiz, spesso più lunghi dello schermo e fatti scorrere un po' alla volta. Rispondi in italiano, in modo conciso.",
+  "defaultPrompt": "Rispondi a ogni domanda visibile. Per ciascuna indica la risposta corretta (lettera e testo dell'opzione) e una motivazione di una riga. Se la domanda è aperta, rispondi in 1-3 frasi.",
   "model": "claude-haiku-4-5-20251001",
-  "maxTokens": 400,
+  "maxTokens": 1000,
   "intervalSec": 30,
   "imageMaxWidth": 1280,
   "jpegQuality": 0.7
@@ -57,12 +57,13 @@ Variabili d'ambiente (`.env`): `ANTHROPIC_API_KEY` (obbligatoria), `ADMIN_PASSWO
 | GET | `/admin` | Basic Auth | `admin.html` |
 | GET | `/api/client-config` | pubblico | `{ intervalSec, imageMaxWidth, jpegQuality }` |
 | POST | `/api/frame` | **solo loopback** | body `{ image: "<base64 jpeg senza prefisso>" }` → chiama Claude, risponde con il risultato e lo trasmette via SSE |
+| POST | `/api/reset` | **solo loopback** | svuota i blocchi già elaborati (chiamato da Capture a ogni "Avvia analisi") |
 | GET | `/api/events` | pubblico | stream SSE; all'apertura invia subito gli ultimi risultati in memoria (max 10) |
 | GET | `/api/latest` | pubblico | ultimo risultato (o `null`) |
 | GET | `/api/config` | Basic Auth | config completa |
 | PUT | `/api/config` | Basic Auth | aggiorna e salva `config.json`, invia evento SSE `config` |
 
-Evento SSE `result`: `{ id, ts, text, model, usage: { input_tokens, output_tokens }, truncated?, error? }`. `truncated` è `true` se la risposta si è fermata per `maxTokens`.
+Evento SSE `result`: `{ id, ts, text, model, usage: { input_tokens, output_tokens }, error? }`. Se la risposta si ferma per `maxTokens` è un errore.
 
 ## Comportamenti obbligatori
 
@@ -72,7 +73,7 @@ Evento SSE `result`: `{ id, ts, text, model, usage: { input_tokens, output_token
 4. **Protezione dei costi**: `/api/frame` accetta solo richieste da `127.0.0.1` / `::1` / `::ffff:127.0.0.1`; altrimenti `403`. Limite body JSON 5 MB.
 5. **Errori**: un errore dell'API non fa crashare il server; viene trasmesso come evento `result` con campo `error` e mostrato in entrambe le pagine.
 6. **Cronologia**: il server tiene in memoria solo gli ultimi 10 risultati (`GET /api/latest` restituisce l'ultimo). Nessuna persistenza su disco dei risultati.
-7. **Domande già analizzate**: al prompt si aggiunge il testo delle ultime 3 analisi valide. Se Claude risponde `DUPLICATO`, il risultato non viene salvato né trasmesso via SSE; `/api/frame` risponde con `duplicate: true`.
+7. **Blocchi incrementali**: la risposta è JSON (`output_config.format`) `{ blocks: [{ key, text }] }`. Al prompt si aggiungono istruzioni fisse: elaborare solo i blocchi (es. domanda + opzioni) visibili per intero, `key` = numero della domanda, e l'elenco delle chiavi già elaborate da escludere. Il server scarta comunque le chiavi già viste; se non resta nessun blocco nuovo il risultato non viene salvato né trasmesso e `/api/frame` risponde con `duplicate: true`. `text` del risultato = testi dei blocchi nuovi uniti.
 8. **Config a caldo**: le modifiche dall'admin valgono dalla chiamata successiva, senza riavvio. Il client Capture, ricevendo l'evento SSE `config`, riallinea l'intervallo.
 
 ## Requisiti UI
