@@ -3,87 +3,133 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HDMI Vision — Capture</title>
+<title>HDMI Vision</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #0b0b0d; color: #e8e8ea; font-family: -apple-system, system-ui, sans-serif; }
-  #toolbar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-    padding: 10px 14px; background: #17171a; border-bottom: 1px solid #2a2a2e;
+  #app { display: flex; height: 100%; gap: 16px; padding: 16px; }
+  #side { width: 260px; flex: none; display: flex; flex-direction: column; gap: 10px; }
+  #preview { width: 100%; aspect-ratio: 16 / 9; background: #000; border: 2px solid #3a3a3f; border-radius: 8px; overflow: hidden; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  select, .hbtn {
+    width: 100%; background: #232327; color: #e8e8ea; border: 2px solid #3a3a3f; border-radius: 8px;
+    padding: 12px 10px; font-size: 15px; text-align: center;
   }
-  select, button {
-    background: #232327; color: #e8e8ea; border: 1px solid #3a3a3f; border-radius: 6px;
-    padding: 6px 10px; font-size: 14px; cursor: pointer;
-  }
-  button:hover { background: #2c2c31; }
-  button.active { background: #2f6f3e; border-color: #3f8f4f; }
-  #status { padding: 3px 8px; border-radius: 4px; font-size: 13px; }
+  .hbtn { position: relative; overflow: hidden; cursor: pointer; user-select: none; }
+  .hbtn span { position: relative; z-index: 1; }
+  .hbtn i { position: absolute; inset: 0 auto 0 0; width: 0; background: #2f6f3e; }
+  .hbtn.arming i { width: 100%; transition: width 3s linear; }
+  .hbtn.fired { border-color: #3f8f4f; }
+  #status { padding: 4px 8px; border-radius: 4px; font-size: 13px; text-align: center; }
   #status.ok { background: #1e4b26; color: #9be0a6; }
   #status.progress { background: #4b3d1e; color: #e0c99b; }
   #status.error { background: #4b1e1e; color: #e09b9b; }
   #status.idle { background: #2a2a2e; color: #9a9aa0; }
-  #tokens, #countdown { font-size: 13px; color: #9a9aa0; }
-  #stage { position: relative; width: 100%; height: calc(100% - 52px); background: #000; display: flex; align-items: center; justify-content: center; }
-  video { max-width: 100%; max-height: 100%; }
+  #tokens { font-size: 13px; color: #9a9aa0; text-align: center; }
+  #main { flex: 1; min-width: 0; overflow-y: auto; border: 1px solid #2a2a2e; border-radius: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { width: 50%; vertical-align: top; padding: 18px 22px; border-bottom: 1px solid #2a2a2e; font-size: 1.6rem; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }
+  td + td { border-left: 1px solid #2a2a2e; }
+  tr.error td { color: #e09b9b; }
+  #empty { color: #6a6a70; font-style: italic; font-size: 1.4rem; padding: 22px; }
+  #live { font-size: 12px; color: #9a9aa0; text-align: center; }
 </style>
 </head>
 <body>
-  <div id="toolbar">
-    <select id="deviceSelect"></select>
-    <button id="reloadBtn" title="Se l'immagine si blocca o diventa un colore pieno dopo un cambio di risoluzione della sorgente, riacquisisce lo stream">Riavvia stream</button>
-    <button id="fullscreenBtn">Schermo intero</button>
-    <button id="toggleBtn">Avvia analisi</button>
-    <span id="countdown">—</span>
-    <span id="status" class="idle">inattivo</span>
-    <span id="tokens"></span>
-  </div>
-  <div id="stage">
-    <video id="video" autoplay playsinline muted></video>
+  <div id="app">
+    <div id="side">
+      <div id="preview"><video id="video" autoplay playsinline muted></video></div>
+      <div class="hbtn" id="analyzeBtn" title="Tieni il mouse sopra per 3 secondi"><i></i><span>Avvia analisi</span></div>
+      <select id="deviceSelect"></select>
+      <div class="hbtn" id="reloadBtn" title="Se l'immagine si blocca o diventa un colore pieno dopo un cambio di risoluzione della sorgente, riacquisisce lo stream"><i></i><span>Riavvia stream</span></div>
+      <div id="status" class="idle">inattivo</div>
+      <div id="tokens"></div>
+      <div id="live">disconnesso</div>
+    </div>
+    <div id="main">
+      <div id="empty">In attesa della prima analisi…</div>
+      <table id="table"><tbody></tbody></table>
+    </div>
   </div>
   <canvas id="canvas" hidden></canvas>
 
   <script>
+    const HOVER_MS = 3000;
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const deviceSelect = document.getElementById("deviceSelect");
-    const reloadBtn = document.getElementById("reloadBtn");
-    const fullscreenBtn = document.getElementById("fullscreenBtn");
-    const toggleBtn = document.getElementById("toggleBtn");
-    const countdownEl = document.getElementById("countdown");
     const statusEl = document.getElementById("status");
     const tokensEl = document.getElementById("tokens");
+    const liveEl = document.getElementById("live");
+    const mainEl = document.getElementById("main");
+    const tbody = document.querySelector("#table tbody");
 
-    let clientConfig = { intervalSec: 30, imageMaxWidth: 1280, jpegQuality: 0.7 };
-    let analyzing = false;
-    let countdownValue = 0;
-    let countdownTimer = null;
+    let clientConfig = { imageMaxWidth: 1280, jpegQuality: 0.7 };
     let inFlight = false;
+    const seen = new Set();
 
     function setStatus(kind, text) {
       statusEl.className = kind;
       statusEl.textContent = text;
     }
 
+    // Pulsante che scatta solo dopo HOVER_MS di hover continuo; per ripetere bisogna uscire e rientrare
+    function hoverButton(el, action) {
+      let timer = null;
+      el.addEventListener("mouseenter", () => {
+        if (el.classList.contains("fired")) return;
+        el.classList.add("arming");
+        timer = setTimeout(() => {
+          el.classList.remove("arming");
+          el.classList.add("fired");
+          action();
+        }, HOVER_MS);
+      });
+      el.addEventListener("mouseleave", () => {
+        clearTimeout(timer);
+        el.classList.remove("arming", "fired");
+      });
+    }
+
     async function loadClientConfig() {
       try {
-        const res = await fetch("/api/client-config");
-        clientConfig = await res.json();
+        clientConfig = await (await fetch("/api/client-config")).json();
       } catch (e) {
         console.error("Impossibile caricare la config client", e);
       }
     }
 
-    function connectEvents() {
-      const es = new EventSource("/api/events");
-      es.addEventListener("config", (ev) => {
-        const data = JSON.parse(ev.data);
-        clientConfig = { ...clientConfig, ...data };
-        if (analyzing) resetCountdown();
-      });
+    // --- Output ---
+    function addRow(q, a, isError) {
+      document.getElementById("empty")?.remove();
+      const tr = document.createElement("tr");
+      if (isError) tr.className = "error";
+      const c1 = document.createElement("td"), c2 = document.createElement("td");
+      c1.textContent = q;
+      c2.textContent = a;
+      tr.append(c1, c2);
+      tbody.append(tr);
+      mainEl.scrollTo({ top: mainEl.scrollHeight, behavior: "smooth" });
     }
 
-    // --- Dispositivi ---
+    function showResult(r) {
+      // alla riconnessione il server rimanda la cronologia: scarta i duplicati
+      if (!r || seen.has(r.id)) return;
+      seen.add(r.id);
+      if (r.error) return addRow("Errore", r.error, true);
+      for (const b of r.blocks || []) addRow(`Domanda ${b.key} (${b.question})`, b.text);
+    }
+
+    function connectEvents() {
+      const es = new EventSource("/api/events");
+      es.onopen = () => { liveEl.textContent = "live"; };
+      es.onerror = () => { liveEl.textContent = "disconnesso"; };
+      es.addEventListener("result", (ev) => showResult(JSON.parse(ev.data)));
+      es.addEventListener("config", (ev) => { clientConfig = { ...clientConfig, ...JSON.parse(ev.data) }; });
+    }
+
+    // --- Dispositivi / stream ---
     async function populateDevices() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = devices.filter((d) => d.kind === "videoinput");
@@ -96,24 +142,19 @@
       }
       let saved = null;
       try { saved = localStorage.getItem("hdmiVision.deviceId"); } catch (e) {}
-      if (saved && videoInputs.some((d) => d.deviceId === saved)) {
-        deviceSelect.value = saved;
-      }
+      if (saved && videoInputs.some((d) => d.deviceId === saved)) deviceSelect.value = saved;
     }
 
     async function startStream(deviceId) {
-      if (video.srcObject) {
-        video.srcObject.getTracks().forEach((t) => t.stop());
-      }
-      const constraints = {
+      if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop());
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: deviceId ? { exact: deviceId } : undefined,
           width: { ideal: 1920 },
           height: { ideal: 1080 },
         },
         audio: false,
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      });
       video.srcObject = stream;
       // Dopo il primo getUserMedia le label dei device sono disponibili: ripopola.
       await populateDevices();
@@ -121,45 +162,30 @@
 
     deviceSelect.addEventListener("change", async () => {
       try { localStorage.setItem("hdmiVision.deviceId", deviceSelect.value); } catch (e) {}
-      try {
-        await startStream(deviceSelect.value);
-      } catch (e) {
-        setStatus("error", "errore camera");
-      }
-    });
-
-    fullscreenBtn.addEventListener("click", () => {
-      if (video.requestFullscreen) video.requestFullscreen();
+      try { await startStream(deviceSelect.value); } catch (e) { setStatus("error", "errore camera"); }
     });
 
     // Riacquisisce lo stream: utile se il segnale sorgente cambia risoluzione/refresh
-    // (es. dopo un login) e il browser resta agganciato al vecchio formato mostrando
-    // un frame bloccato o a colore pieno.
-    reloadBtn.addEventListener("click", async () => {
-      try {
-        await startStream(deviceSelect.value || undefined);
-      } catch (e) {
-        setStatus("error", "errore riavvio camera");
-      }
+    // e il browser resta agganciato al vecchio formato mostrando un frame bloccato.
+    hoverButton(document.getElementById("reloadBtn"), async () => {
+      try { await startStream(deviceSelect.value || undefined); } catch (e) { setStatus("error", "errore riavvio camera"); }
     });
 
-    // --- Cattura frame ---
+    // --- Cattura e analisi ---
     function captureFrameBase64() {
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw || !vh) return null;
       const scale = Math.min(1, clientConfig.imageMaxWidth / vw);
       canvas.width = Math.round(vw * scale);
       canvas.height = Math.round(vh * scale);
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", clientConfig.jpegQuality);
-      return dataUrl.split(",")[1];
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg", clientConfig.jpegQuality).split(",")[1];
     }
 
-    async function sendFrame() {
+    async function analyze() {
       if (inFlight) return;
       const image = captureFrameBase64();
-      if (!image) return;
+      if (!image) return setStatus("error", "nessun video da catturare");
       inFlight = true;
       setStatus("progress", "in corso");
       try {
@@ -168,19 +194,11 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ image }),
         });
-        if (res.status === 409) {
-          setStatus("ok", "ok"); // elaborazione precedente ancora attiva, salta
-          return;
-        }
+        if (res.status === 409) return setStatus("progress", "elaborazione già in corso");
         const data = await res.json();
-        if (data.error) {
-          setStatus("error", "errore: " + data.error);
-        } else {
-          setStatus("ok", data.duplicate ? "ok (nessun blocco nuovo)" : "ok");
-          if (data.usage) {
-            tokensEl.textContent = `token: in ${data.usage.input_tokens} / out ${data.usage.output_tokens}`;
-          }
-        }
+        if (data.error) return setStatus("error", "errore: " + data.error);
+        setStatus("ok", data.duplicate ? "ok (nessun blocco nuovo)" : "ok");
+        if (data.usage) tokensEl.textContent = `token: in ${data.usage.input_tokens} / out ${data.usage.output_tokens}`;
       } catch (e) {
         setStatus("error", "errore di rete");
       } finally {
@@ -188,48 +206,13 @@
       }
     }
 
-    // --- Countdown / loop analisi ---
-    function resetCountdown() {
-      countdownValue = clientConfig.intervalSec;
-    }
-
-    function tick() {
-      if (!analyzing) return;
-      countdownValue -= 1;
-      if (countdownValue <= 0) {
-        sendFrame();
-        resetCountdown();
-      }
-      countdownEl.textContent = `prossimo frame: ${countdownValue}s`;
-    }
-
-    async function startAnalysis() {
-      analyzing = true;
-      await fetch("/api/reset", { method: "POST" }).catch(() => {});
-      toggleBtn.textContent = "Ferma analisi";
-      toggleBtn.classList.add("active");
-      sendFrame();
-      resetCountdown();
-      countdownTimer = setInterval(tick, 1000);
-    }
-
-    function stopAnalysis() {
-      analyzing = false;
-      toggleBtn.textContent = "Avvia analisi";
-      toggleBtn.classList.remove("active");
-      countdownEl.textContent = "—";
-      setStatus("idle", "inattivo");
-      if (countdownTimer) clearInterval(countdownTimer);
-    }
-
-    toggleBtn.addEventListener("click", () => {
-      if (analyzing) stopAnalysis(); else startAnalysis();
-    });
+    hoverButton(document.getElementById("analyzeBtn"), analyze);
 
     // --- Avvio ---
     (async function init() {
       await loadClientConfig();
       connectEvents();
+      fetch("/api/reset", { method: "POST" }).catch(() => {}); // nuova sessione: dimentica i blocchi già visti
       try {
         let saved = null;
         try { saved = localStorage.getItem("hdmiVision.deviceId"); } catch (e) {}

@@ -3,7 +3,6 @@
   "defaultPrompt": "Rispondi a ogni domanda visibile. Per ciascuna indica la risposta corretta (lettera e testo dell'opzione) e una motivazione di una riga. Se la domanda è aperta, rispondi in 1-3 frasi.",
   "model": "claude-haiku-4-5-20251001",
   "maxTokens": 1000,
-  "intervalSec": 30,
   "imageMaxWidth": 1280,
   "jpegQuality": 0.7
 }

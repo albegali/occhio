@@ -1,10 +1,10 @@
 # HDMI Vision
 
-Cattura su Mac lo stream di una capture card HDMI, lo mostra a schermo e ogni 30 secondi invia un fotogramma a Claude. L'analisi appare in tempo reale su una pagina dedicata, consultabile da qualsiasi dispositivo in rete.
+Cattura su Mac lo stream di una capture card HDMI, lo mostra a schermo e, quando lo chiedi, invia un fotogramma a Claude. Anteprima e risultati stanno nella stessa schermata; `/output` mostra gli stessi risultati su altri dispositivi in rete.
 
 | Pagina | Indirizzo | A cosa serve |
 |---|---|---|
-| Capture | `http://localhost:3000/` | Stream live + invio dei frame a Claude |
+| Capture + Output | `http://localhost:3000/` | Anteprima, controlli a hover e tabella domande/risposte |
 | Output | `http://<nome-mac>.local:3000/output` | Output dell'AI, aggiornato a ogni elaborazione |
 | Admin | `http://localhost:3000/admin` | Prompt e parametri (protetta da password) |
 
@@ -28,7 +28,7 @@ Poi, sul Mac con la capture card:
 
 1. Apri `http://localhost:3000/` e consenti l'accesso alla fotocamera. La capture card viene vista come una webcam.
 2. Scegli la capture card dal menu dei dispositivi.
-3. Premi **Avvia analisi**. Il primo frame parte subito, poi uno ogni 30 secondi.
+3. Tieni il mouse su **Avvia analisi** per 3 secondi: viene catturata la schermata corrente e analizzata. Per una nuova analisi esci con il mouse e rientra. Stesso meccanismo per **Riavvia stream**.
 4. Apri `/output` su un altro schermo, tablet o telefono della stessa rete.
 
 > Se il browser non chiede il permesso: Impostazioni di Sistema → Privacy e sicurezza → Fotocamera → abilita il browser.
@@ -43,7 +43,6 @@ Da `/admin` (utente qualsiasi, password = `ADMIN_PASSWORD`):
 | Prompt di default | rispondi a ogni domanda visibile | Inviato insieme a ogni frame |
 | Modello | `claude-haiku-4-5-20251001` | Il più economico; passa a `claude-sonnet-5` per analisi più ricche |
 | Max token output | 1000 | Limita lunghezza e costo di ogni risposta |
-| Intervallo (s) | 30 | Tempo tra un frame e il successivo |
 | Larghezza immagine | 1280 px | Più bassa = meno token di input |
 | Qualità JPEG | 0.7 | Incide sul peso del file, non sui token |
 
@@ -51,7 +50,7 @@ Le modifiche valgono dalla chiamata successiva, senza riavviare.
 
 ## Consumi indicativi
 
-Un frame a 1280×720 costa circa 1.200 token di input, più prompt e risposta (max 1000). A 30 secondi fanno 120 chiamate l'ora. Per ridurre i costi, abbassa la larghezza dell'immagine (960 px ≈ 700 token), accorcia i prompt o allunga l'intervallo. Non si rimanda la conversazione al modello: si aggiunge solo l'elenco delle domande già elaborate, così scrollando quelle ancora visibili non vengono rielaborate.
+Un frame a 1280×720 costa circa 1.200 token di input, più prompt e risposta (max 1000). Una chiamata per ogni analisi avviata. Per ridurre i costi, abbassa la larghezza dell'immagine (960 px ≈ 700 token), accorcia i prompt o analizza meno spesso. Non si rimanda la conversazione al modello: si aggiunge solo l'elenco delle domande già elaborate, così scrollando quelle ancora visibili non vengono rielaborate.
 
 ## Sicurezza
 
@@ -63,7 +62,6 @@ Un frame a 1280×720 costa circa 1.200 token di input, più prompt e risposta (m
 
 - Le sorgenti protette da HDCP (Netflix, alcune console, alcuni decoder) arrivano nere alla capture card: è una limitazione hardware, non dell'app.
 - Nessun audio, nessuna registrazione, nessuno storico persistente (gli ultimi 10 risultati restano in memoria finché il server è attivo).
-- La pagina Capture deve restare aperta e in primo piano: alcuni browser rallentano i timer delle schede in background.
 
 ## Sviluppo con Claude Code
 

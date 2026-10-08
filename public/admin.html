@@ -54,10 +54,6 @@
 
     <div class="row">
       <div>
-        <label for="intervalSec">Intervallo (s) (5–3600)</label>
-        <input id="intervalSec" type="number" min="5" max="3600" step="1">
-      </div>
-      <div>
         <label for="imageMaxWidth">Larghezza immagine (px) (320–1920)</label>
         <input id="imageMaxWidth" type="number" min="320" max="1920" step="1">
       </div>
@@ -82,14 +78,13 @@
     defaultPrompt: "Descrivi cosa si vede in questa schermata e segnala eventuali cambiamenti rilevanti.",
     model: "claude-haiku-4-5-20251001",
     maxTokens: 400,
-    intervalSec: 30,
     imageMaxWidth: 1280,
     jpegQuality: 0.7,
   };
 
   const form = document.getElementById("form");
   const msgEl = document.getElementById("msg");
-  const fields = ["systemPrompt", "defaultPrompt", "model", "maxTokens", "intervalSec", "imageMaxWidth", "jpegQuality"];
+  const fields = ["systemPrompt", "defaultPrompt", "model", "maxTokens", "imageMaxWidth", "jpegQuality"];
 
   function fill(cfg) {
     for (const f of fields) document.getElementById(f).value = cfg[f];
@@ -101,7 +96,6 @@
       defaultPrompt: document.getElementById("defaultPrompt").value,
       model: document.getElementById("model").value,
       maxTokens: Number(document.getElementById("maxTokens").value),
-      intervalSec: Number(document.getElementById("intervalSec").value),
       imageMaxWidth: Number(document.getElementById("imageMaxWidth").value),
       jpegQuality: Number(document.getElementById("jpegQuality").value),
     };

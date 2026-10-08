@@ -41,7 +41,6 @@ function validateConfig(body) {
   if (!isNonEmptyString(body.defaultPrompt)) errors.push("defaultPrompt non valido");
   if (!isNonEmptyString(body.model)) errors.push("model non valido");
   if (!Number.isFinite(body.maxTokens) || body.maxTokens < 50 || body.maxTokens > 4000) errors.push("maxTokens deve essere tra 50 e 4000");
-  if (!Number.isFinite(body.intervalSec) || body.intervalSec < 5 || body.intervalSec > 3600) errors.push("intervalSec deve essere tra 5 e 3600");
   if (!Number.isFinite(body.imageMaxWidth) || body.imageMaxWidth < 320 || body.imageMaxWidth > 1920) errors.push("imageMaxWidth deve essere tra 320 e 1920");
   if (!Number.isFinite(body.jpegQuality) || body.jpegQuality < 0.3 || body.jpegQuality > 0.95) errors.push("jpegQuality deve essere tra 0.3 e 0.95");
   return errors;
@@ -94,8 +93,8 @@ app.get("/output", (req, res) => res.sendFile(path.join(ROOT, "public", "output.
 app.get("/admin", requireAuth, (req, res) => res.sendFile(path.join(ROOT, "public", "admin.html")));
 
 app.get("/api/client-config", (req, res) => {
-  const { intervalSec, imageMaxWidth, jpegQuality } = config;
-  res.json({ intervalSec, imageMaxWidth, jpegQuality });
+  const { imageMaxWidth, jpegQuality } = config;
+  res.json({ imageMaxWidth, jpegQuality });
 });
 
 app.get("/api/config", requireAuth, (req, res) => res.json(config));
@@ -108,12 +107,11 @@ app.put("/api/config", requireAuth, (req, res) => {
     defaultPrompt: req.body.defaultPrompt,
     model: req.body.model,
     maxTokens: req.body.maxTokens,
-    intervalSec: req.body.intervalSec,
     imageMaxWidth: req.body.imageMaxWidth,
     jpegQuality: req.body.jpegQuality,
   };
   saveConfig(config);
-  broadcast("config", { intervalSec: config.intervalSec, imageMaxWidth: config.imageMaxWidth, jpegQuality: config.jpegQuality });
+  broadcast("config", { imageMaxWidth: config.imageMaxWidth, jpegQuality: config.jpegQuality });
   res.json(config);
 });
 
@@ -145,8 +143,8 @@ const BLOCKS_FORMAT = {
         type: "array",
         items: {
           type: "object",
-          properties: { key: { type: "string" }, text: { type: "string" } },
-          required: ["key", "text"],
+          properties: { key: { type: "string" }, question: { type: "string" }, text: { type: "string" } },
+          required: ["key", "question", "text"],
           additionalProperties: false,
         },
       },
@@ -163,7 +161,7 @@ function blockInstructions() {
     "Dividi il contenuto in blocchi logici (es. una domanda con tutte le sue opzioni). " +
     "Elabora SOLO i blocchi visibili per intero: ignora quelli tagliati in alto o in basso, verranno elaborati quando saranno interamente visibili. " +
     'Per ogni blocco restituisci "key", un identificativo stabile (solo il numero della domanda se presente, es. "3", altrimenti le prime 6 parole del blocco), ' +
-    'e "text", la tua risposta per quel blocco, che inizia con il numero o l\'etichetta del blocco.' +
+    '"question", l\'inizio della domanda (max 10 parole), e "text", solo la risposta per quel blocco (es. "A: 1, 2, 3 — motivazione").' +
     (seen.length ? `\nBlocchi già elaborati, da NON includere: ${seen.join(" | ")}` : "")
   );
 }
@@ -207,6 +205,7 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
       seenBlocks.set(k, b.key);
       return true;
     });
+    result.blocks = fresh;
     result.text = fresh.map((b) => b.text).join("\n\n");
     result.usage = { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens };
     const durationMs = Date.now() - startedAt;
