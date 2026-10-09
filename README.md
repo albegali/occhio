@@ -20,7 +20,7 @@ Cattura su Mac lo stream di una capture card HDMI, lo mostra a schermo e, quando
 ```bash
 npm install
 cp .env.example .env
-# modifica .env: ANTHROPIC_API_KEY e ADMIN_PASSWORD
+# modifica .env: ANTHROPIC_API_KEY e ADMIN_PASSWORD (OPENAI_API_KEY opzionale, per il fallback)
 npm start
 ```
 
@@ -40,8 +40,9 @@ Da `/admin` (utente qualsiasi, password = `ADMIN_PASSWORD`):
 | Campo | Default | Note |
 |---|---|---|
 | System prompt | lettura di quiz su schermate scrollate, in italiano | Ruolo e regole del modello |
-| Prompt di default | rispondi a ogni domanda visibile | Inviato insieme a ogni frame |
+| Prompt di default | rispondi alla domanda | Inviato con il testo di ogni singola domanda |
 | Modello | `claude-haiku-4-5-20251001` | Il più economico; passa a `claude-sonnet-5` per analisi più ricche |
+| Modello di fallback | `gpt-5-mini` | Usato via API OpenAI se Claude non risponde (serve `OPENAI_API_KEY`) |
 | Max token output | 1000 | Limita lunghezza e costo di ogni risposta |
 | Larghezza immagine | 1280 px | Più bassa = meno token di input |
 | Qualità JPEG | 0.7 | Incide sul peso del file, non sui token |
@@ -50,7 +51,7 @@ Le modifiche valgono dalla chiamata successiva, senza riavviare.
 
 ## Consumi indicativi
 
-Un frame a 1280×720 costa circa 1.200 token di input, più prompt e risposta (max 1000). Una chiamata per ogni analisi avviata. Per ridurre i costi, abbassa la larghezza dell'immagine (960 px ≈ 700 token), accorcia i prompt o analizza meno spesso. Non si rimanda la conversazione al modello: si aggiunge solo l'elenco delle domande già elaborate, così scrollando quelle ancora visibili non vengono rielaborate.
+Ogni analisi fa una chiamata di estrazione con l'immagine (un frame a 1280×720 costa circa 1.200 token di input) che trascrive le domande visibili, formule comprese, e poi una chiamata solo testo per ciascuna domanda nuova (max 1000 token di risposta ciascuna). Le risposte appaiono sempre in ordine di numero di domanda. Per ridurre i costi, abbassa la larghezza dell'immagine (960 px ≈ 700 token), accorcia i prompt o analizza meno spesso. Non si rimanda la conversazione al modello: si aggiunge solo l'elenco delle domande già elaborate, così scrollando quelle ancora visibili non vengono rielaborate.
 
 ## Sicurezza
 

@@ -100,31 +100,55 @@
       }
     }
 
-    // --- Output ---
-    function addRow(q, a, isError) {
+    // --- Output: una riga per domanda, sempre ordinate per chiave ("2" prima di "10") ---
+    const rows = new Map(); // key -> <tr>
+    const compareKeys = (a, b) => {
+      const na = /^\d/.test(a), nb = /^\d/.test(b);
+      if (na !== nb) return na ? -1 : 1; // chiavi non numeriche in coda
+      return a.localeCompare(b, "it", { numeric: true });
+    };
+    const short = (s, n = 80) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
+
+    function makeRow() {
       document.getElementById("empty")?.remove();
       const tr = document.createElement("tr");
-      if (isError) tr.className = "error";
-      const c1 = document.createElement("td"), c2 = document.createElement("td");
-      c1.textContent = q;
-      c2.textContent = a;
-      tr.append(c1, c2);
-      tbody.append(tr);
-      mainEl.scrollTo({ top: mainEl.scrollHeight, behavior: "smooth" });
+      tr.append(document.createElement("td"), document.createElement("td"));
+      return tr;
+    }
+
+    function showBlock(b) {
+      let tr = rows.get(b.key);
+      if (!tr) {
+        tr = makeRow();
+        tr.dataset.key = b.key;
+        rows.set(b.key, tr);
+        const next = [...tbody.querySelectorAll("tr[data-key]")].find((r) => compareKeys(b.key, r.dataset.key) < 0);
+        tbody.insertBefore(tr, next || tbody.querySelector("tr:not([data-key])"));
+      }
+      const [c1, c2] = tr.children;
+      c1.textContent = `Domanda ${b.key} (${short(b.question)})`;
+      c1.title = b.question;
+      c2.textContent = b.error ? "Errore: " + b.error : b.answer ?? "…";
+      tr.className = b.error ? "error" : "";
     }
 
     function showResult(r) {
-      // alla riconnessione il server rimanda la cronologia: scarta i duplicati
-      if (!r || seen.has(r.id)) return;
+      // alla riconnessione il server rimanda gli errori: scarta i duplicati
+      if (!r || !r.error || seen.has(r.id)) return;
       seen.add(r.id);
-      if (r.error) return addRow("Errore", r.error, true);
-      for (const b of r.blocks || []) addRow(`Domanda ${b.key} (${b.question})`, b.text);
+      const tr = makeRow();
+      tr.className = "error";
+      tr.children[0].textContent = "Errore " + new Date(r.ts).toLocaleTimeString("it-IT");
+      tr.children[1].textContent = r.error;
+      tbody.append(tr);
+      mainEl.scrollTo({ top: mainEl.scrollHeight, behavior: "smooth" });
     }
 
     function connectEvents() {
       const es = new EventSource("/api/events");
       es.onopen = () => { liveEl.textContent = "live"; };
       es.onerror = () => { liveEl.textContent = "disconnesso"; };
+      es.addEventListener("block", (ev) => showBlock(JSON.parse(ev.data)));
       es.addEventListener("result", (ev) => showResult(JSON.parse(ev.data)));
       es.addEventListener("config", (ev) => { clientConfig = { ...clientConfig, ...JSON.parse(ev.data) }; });
     }
@@ -197,7 +221,7 @@
         if (res.status === 409) return setStatus("progress", "elaborazione già in corso");
         const data = await res.json();
         if (data.error) return setStatus("error", "errore: " + data.error);
-        setStatus("ok", data.duplicate ? "ok (nessun blocco nuovo)" : "ok");
+        setStatus("ok", (data.duplicate ? "ok (nessuna domanda nuova)" : "ok") + (data.fallback ? ` · fallback ${data.model}` : ""));
         if (data.usage) tokensEl.textContent = `token: in ${data.usage.input_tokens} / out ${data.usage.output_tokens}`;
       } catch (e) {
         setStatus("error", "errore di rete");

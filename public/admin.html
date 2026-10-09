@@ -47,6 +47,10 @@
         <input id="model" type="text">
       </div>
       <div>
+        <label for="fallbackModel">Modello di fallback (OpenAI)</label>
+        <input id="fallbackModel" type="text">
+      </div>
+      <div>
         <label for="maxTokens">Max token output (50–4000)</label>
         <input id="maxTokens" type="number" min="50" max="4000" step="1">
       </div>
@@ -77,6 +81,7 @@
     systemPrompt: "Sei un assistente che analizza schermate provenienti da una sorgente video HDMI. Rispondi in italiano, in modo conciso.",
     defaultPrompt: "Descrivi cosa si vede in questa schermata e segnala eventuali cambiamenti rilevanti.",
     model: "claude-haiku-4-5-20251001",
+    fallbackModel: "gpt-5-mini",
     maxTokens: 400,
     imageMaxWidth: 1280,
     jpegQuality: 0.7,
@@ -84,7 +89,7 @@
 
   const form = document.getElementById("form");
   const msgEl = document.getElementById("msg");
-  const fields = ["systemPrompt", "defaultPrompt", "model", "maxTokens", "imageMaxWidth", "jpegQuality"];
+  const fields = ["systemPrompt", "defaultPrompt", "model", "fallbackModel", "maxTokens", "imageMaxWidth", "jpegQuality"];
 
   function fill(cfg) {
     for (const f of fields) document.getElementById(f).value = cfg[f];
@@ -95,6 +100,7 @@
       systemPrompt: document.getElementById("systemPrompt").value,
       defaultPrompt: document.getElementById("defaultPrompt").value,
       model: document.getElementById("model").value,
+      fallbackModel: document.getElementById("fallbackModel").value,
       maxTokens: Number(document.getElementById("maxTokens").value),
       imageMaxWidth: Number(document.getElementById("imageMaxWidth").value),
       jpegQuality: Number(document.getElementById("jpegQuality").value),

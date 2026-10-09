@@ -18,17 +18,11 @@
   #live.on { background: #1e4b26; color: #9be0a6; }
   #live.off { background: #4b1e1e; color: #e09b9b; }
   #ts { color: #9a9aa0; }
-  #feed { padding: 20px 40px 80px; }
-  #empty { color: #6a6a70; font-style: italic; font-size: 2rem; padding: 10px 0; }
-  .item { border-bottom: 1px solid #2a2a2e; padding: 24px 0; }
-  .item time { display: block; color: #9a9aa0; font-size: 1rem; margin-bottom: 8px; }
-  .item .text { font-size: 2rem; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-  .item.error .text { color: #e09b9b; }
-  #newBtn {
-    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-    padding: 12px 22px; border: 0; border-radius: 24px; background: #3a6df0; color: #fff;
-    font-size: 18px; font-weight: 600; cursor: pointer;
-  }
+  #empty { color: #6a6a70; font-style: italic; font-size: 2rem; padding: 20px 40px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { width: 50%; vertical-align: top; padding: 20px 28px; border-bottom: 1px solid #2a2a2e; font-size: 2rem; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }
+  td + td { border-left: 1px solid #2a2a2e; }
+  tr.error td { color: #e09b9b; }
 </style>
 </head>
 <body>
@@ -36,65 +30,75 @@
     <span id="live" class="off">disconnesso</span>
     <span id="ts"></span>
   </div>
-  <div id="feed"><div id="empty">In attesa del primo risultato…</div></div>
-  <button id="newBtn" hidden></button>
+  <div id="empty">In attesa della prima analisi…</div>
+  <table><tbody id="tbody"></tbody></table>
 
   <script>
-    const MAX_ITEMS = 200;
     const liveEl = document.getElementById("live");
     const tsEl = document.getElementById("ts");
-    const feedEl = document.getElementById("feed");
-    const newBtn = document.getElementById("newBtn");
+    const tbody = document.getElementById("tbody");
     const seen = new Set();
-    let unread = 0;
 
-    const nearBottom = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 80;
-    const scrollToBottom = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+    // Una riga per domanda, sempre ordinate per chiave ("2" prima di "10")
+    const rows = new Map(); // key -> <tr>
+    const compareKeys = (a, b) => {
+      const na = /^\d/.test(a), nb = /^\d/.test(b);
+      if (na !== nb) return na ? -1 : 1; // chiavi non numeriche in coda
+      return a.localeCompare(b, "it", { numeric: true });
+    };
+    const short = (s, n = 80) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
 
-    function updateNewBtn() {
-      newBtn.hidden = unread === 0;
-      newBtn.textContent = unread === 1 ? "1 nuovo ↓" : unread + " nuovi ↓";
-    }
-
-    function append(result) {
-      // alla riconnessione il server rimanda la cronologia: scarta i duplicati
-      if (!result || seen.has(result.id)) return;
-      seen.add(result.id);
-      // decide prima di aggiungere, altrimenti il nuovo contenuto sposta il fondo
-      const follow = nearBottom();
-
+    function makeRow() {
       document.getElementById("empty")?.remove();
-      const item = document.createElement("div");
-      item.className = "item" + (result.error ? " error" : "");
-      const time = document.createElement("time");
-      time.textContent = new Date(result.ts).toLocaleTimeString("it-IT");
-      const text = document.createElement("div");
-      text.className = "text";
-      text.textContent = result.error ? "Errore: " + result.error : result.text || "";
-      item.append(time, text);
-      feedEl.append(item);
-      while (feedEl.children.length > MAX_ITEMS) feedEl.firstElementChild.remove();
-
-      tsEl.textContent = "Ultimo aggiornamento: " + time.textContent;
-      if (follow) scrollToBottom();
-      else { unread++; updateNewBtn(); }
+      const tr = document.createElement("tr");
+      tr.append(document.createElement("td"), document.createElement("td"));
+      return tr;
     }
 
-    window.addEventListener("scroll", () => {
-      if (unread && nearBottom()) { unread = 0; updateNewBtn(); }
-    });
-    newBtn.addEventListener("click", () => { unread = 0; updateNewBtn(); scrollToBottom(); });
+    function touch(ts) {
+      tsEl.textContent = "Ultimo aggiornamento: " + new Date(ts || Date.now()).toLocaleTimeString("it-IT");
+    }
+
+    function showBlock(b) {
+      let tr = rows.get(b.key);
+      if (!tr) {
+        tr = makeRow();
+        tr.dataset.key = b.key;
+        rows.set(b.key, tr);
+        const next = [...tbody.querySelectorAll("tr[data-key]")].find((r) => compareKeys(b.key, r.dataset.key) < 0);
+        tbody.insertBefore(tr, next || tbody.querySelector("tr:not([data-key])"));
+      }
+      const [c1, c2] = tr.children;
+      c1.textContent = `Domanda ${b.key} (${short(b.question)})`;
+      c1.title = b.question;
+      c2.textContent = b.error ? "Errore: " + b.error : b.answer ?? "…";
+      tr.className = b.error ? "error" : "";
+      if (b.answer || b.error) touch();
+    }
+
+    function showResult(r) {
+      // alla riconnessione il server rimanda gli errori: scarta i duplicati
+      if (!r || !r.error || seen.has(r.id)) return;
+      seen.add(r.id);
+      const tr = makeRow();
+      tr.className = "error";
+      tr.children[0].textContent = "Errore " + new Date(r.ts).toLocaleTimeString("it-IT");
+      tr.children[1].textContent = r.error;
+      tbody.append(tr);
+      touch(r.ts);
+    }
 
     function setLive(on) {
       liveEl.textContent = on ? "live" : "disconnesso";
       liveEl.className = on ? "on" : "off";
     }
 
-    // all'apertura il server invia gli ultimi risultati in memoria, poi quelli nuovi
+    // all'apertura il server invia le domande della sessione, poi gli aggiornamenti
     const es = new EventSource("/api/events");
     es.onopen = () => setLive(true);
     es.onerror = () => setLive(false); // EventSource riprova la connessione automaticamente
-    es.addEventListener("result", (ev) => append(JSON.parse(ev.data)));
+    es.addEventListener("block", (ev) => showBlock(JSON.parse(ev.data)));
+    es.addEventListener("result", (ev) => showResult(JSON.parse(ev.data)));
   </script>
 </body>
 </html>
