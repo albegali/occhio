@@ -25,6 +25,7 @@ server.js            # tutto il backend (~200 righe)
 public/capture.html  # pagina 1: video + cattura frame
 public/output.html   # pagina 2: output AI live
 public/admin.html    # area di amministrazione
+public/voice.html    # assistente vocale (AssemblyAI + Claude)
 config.default.json  # valori di default (versionato)
 config.json          # config attiva (gitignored, creata al primo avvio)
 .env.example
@@ -47,7 +48,7 @@ Non creare altri file o cartelle se non strettamente necessari.
 }
 ```
 
-Variabili d'ambiente (`.env`): `ANTHROPIC_API_KEY` (obbligatoria), `ADMIN_PASSWORD` (obbligatoria), `OPENAI_API_KEY` (opzionale, fallback), `PORT` (default 3000), `HOST` (default `0.0.0.0`).
+Variabili d'ambiente (`.env`): `ANTHROPIC_API_KEY` (obbligatoria), `ADMIN_PASSWORD` (obbligatoria), `OPENAI_API_KEY` (opzionale, fallback), `ASSEMBLYAI_API_KEY` (opzionale, assistente vocale), `PORT` (default 3000), `HOST` (default `0.0.0.0`).
 
 ## API
 
@@ -60,11 +61,15 @@ Variabili d'ambiente (`.env`): `ANTHROPIC_API_KEY` (obbligatoria), `ADMIN_PASSWO
 | POST | `/api/frame` | **solo loopback** | body `{ image: "<base64 jpeg senza prefisso>" }` → chiama Claude, risponde con il risultato e lo trasmette via SSE |
 | POST | `/api/reset` | **solo loopback** | svuota i blocchi già elaborati (chiamato da Capture a ogni "Avvia analisi") |
 | GET | `/api/events` | pubblico | stream SSE; all'apertura invia le domande della sessione (`block`) e gli ultimi errori di frame |
+| GET | `/voice` | pubblico | `voice.html`: assistente vocale |
+| GET | `/api/voice/token` | **solo loopback** | token temporaneo AssemblyAI (60 s) per il WebSocket di streaming |
+| POST | `/api/voice/turn` | **solo loopback** | body `{ text }` (frase conclusa) → `202`; Claude risponde in streaming via evento SSE `voice` se c'è una domanda |
+| POST | `/api/voice/reset` | **solo loopback** | svuota il contesto delle frasi (chiamato a ogni "Avvia ascolto") |
 | GET | `/api/latest` | pubblico | ultimo risultato (o `null`) |
 | GET | `/api/config` | Basic Auth | config completa |
 | PUT | `/api/config` | Basic Auth | aggiorna e salva `config.json`, invia evento SSE `config` |
 
-Evento SSE `block`: `{ key, question, answer (null = in attesa), model?, error?, ts }`, emesso all'estrazione e alla risposta. Evento SSE `result` (riepilogo frame): `{ id, ts, model, newKeys, usage: { input_tokens, output_tokens }, fallback?, error? }`. Se una risposta si ferma per `maxTokens` è un errore.
+Evento SSE `block`: `{ key, question, answer (null = in attesa), model?, error?, ts }`, emesso all'estrazione e alla risposta. Evento SSE `result` (riepilogo frame): `{ id, ts, model, newKeys, usage: { input_tokens, output_tokens }, fallback?, error? }`. Se una risposta si ferma per `maxTokens` è un errore. Evento SSE `voice`: `{ id, ts, question, answer, done, model, fallback?, error? }`, emesso a ogni pezzo di risposta; le ultime 20 vengono reinviate all'apertura.
 
 ## Comportamenti obbligatori
 
@@ -97,7 +102,7 @@ Stile: CSS minimo inline, dark mode di default, nessuna libreria.
 
 ## Fuori scope (MVP)
 
-Audio, registrazione video, storico persistente, multi-utente, login con sessione, HTTPS, test framework, Docker, TypeScript, rilevamento dei cambiamenti tra frame.
+Registrazione audio/video, storico persistente, multi-utente, login con sessione, HTTPS, test framework, Docker, TypeScript, rilevamento dei cambiamenti tra frame.
 
 ## Criteri di accettazione
 

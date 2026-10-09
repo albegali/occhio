@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDMI Vision — Voce</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0b0b0d; color: #f0f0f2; font-family: -apple-system, system-ui, sans-serif; }
+  #bar {
+    position: sticky; top: 0; z-index: 1;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 20px; background: #17171a; border-bottom: 1px solid #2a2a2e; font-size: 15px;
+  }
+  #live { padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 14px; }
+  #live.on { background: #1e4b26; color: #9be0a6; }
+  #live.off { background: #4b1e1e; color: #e09b9b; }
+  select, button {
+    background: #232327; color: #e8e8ea; border: 1px solid #3a3a3f; border-radius: 6px;
+    padding: 8px 12px; font-size: 14px; font-family: inherit; max-width: 100%;
+  }
+  button { cursor: pointer; }
+  button.on { background: #6f2f2f; border-color: #8f3f3f; }
+  #status { color: #9a9aa0; }
+  #status.error { color: #e09b9b; }
+  #status.ok { color: #9be0a6; }
+  #transcript { padding: 12px 20px; border-bottom: 1px solid #2a2a2e; color: #9a9aa0; font-size: 1.1rem; line-height: 1.4; min-height: 3.2em; }
+  #transcript .final { color: #c8c8cc; }
+  #transcript .partial { color: #7a7a80; font-style: italic; }
+  #empty { color: #6a6a70; font-style: italic; font-size: 1.6rem; padding: 20px; }
+  .qa { padding: 18px 20px; border-bottom: 1px solid #2a2a2e; }
+  .qa .q { color: #9a9aa0; font-size: 1.1rem; margin-bottom: 8px; }
+  .qa .a { font-size: 2rem; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }
+  .qa.pending .a::after { content: " ▍"; color: #6a6a70; }
+  .qa .err { color: #e09b9b; font-size: 1.1rem; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <span id="live" class="off">disconnesso</span>
+    <select id="mic"><option value="">Microfono predefinito</option></select>
+    <button id="toggle">Avvia ascolto</button>
+    <span id="status"></span>
+  </div>
+  <div id="transcript"></div>
+  <div id="empty">Nessuna domanda ancora. Le risposte compaiono qui appena viene posta una domanda.</div>
+  <div id="list"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const micSel = $("mic"), toggleBtn = $("toggle"), statusEl = $("status"), transcriptEl = $("transcript"), listEl = $("list");
+    const STORAGE_KEY = "voiceMicId";
+    const ASSEMBLY_URL = "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&encoding=pcm_s16le&speech_model=universal-3-6-pro";
+
+    function setStatus(text, cls = "") {
+      statusEl.textContent = text;
+      statusEl.className = cls;
+    }
+
+    // --- Elenco microfoni (anche l'audio della capture card HDMI compare qui) ---
+    async function listMics() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      let saved = "";
+      try { saved = localStorage.getItem(STORAGE_KEY) || ""; } catch {}
+      const current = micSel.value || saved;
+      micSel.length = 1;
+      for (const d of devices.filter((d) => d.kind === "audioinput" && d.deviceId)) {
+        micSel.add(new Option(d.label || `Microfono ${micSel.length}`, d.deviceId));
+      }
+      if ([...micSel.options].some((o) => o.value === current)) micSel.value = current;
+    }
+    micSel.addEventListener("change", () => {
+      try { localStorage.setItem(STORAGE_KEY, micSel.value); } catch {}
+      if (active) { stop(); start(); }
+    });
+    listMics().catch(() => {});
+
+    // --- Cattura audio: PCM 16 bit mono a 16 kHz, pacchetti da 100 ms ---
+    const WORKLET = `
+      class Pcm extends AudioWorkletProcessor {
+        constructor() { super(); this.buf = new Int16Array(1600); this.n = 0; }
+        process(inputs) {
+          const ch = inputs[0][0];
+          if (ch) for (let i = 0; i < ch.length; i++) {
+            const s = Math.max(-1, Math.min(1, ch[i]));
+            this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            if (this.n === this.buf.length) {
+              this.port.postMessage(this.buf.buffer, [this.buf.buffer]);
+              this.buf = new Int16Array(1600); this.n = 0;
+            }
+          }
+          return true;
+        }
+      }
+      registerProcessor("pcm", Pcm);`;
+
+    let active = false, stream = null, ctx = null, ws = null;
+    let finals = []; // ultime frasi concluse, per la riga di trascrizione
+    let sentTurns = new Set();
+
+    async function start() {
+      active = true;
+      toggleBtn.textContent = "Ferma ascolto";
+      toggleBtn.classList.add("on");
+      setStatus("avvio…");
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: micSel.value ? { exact: micSel.value } : undefined, echoCancellation: false, noiseSuppression: true, autoGainControl: true },
+          video: false,
+        });
+        listMics().catch(() => {}); // dopo il permesso i nomi dei dispositivi sono visibili
+        ctx = new AudioContext({ sampleRate: 16000 });
+        await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" })));
+        const node = new AudioWorkletNode(ctx, "pcm", { numberOfOutputs: 0 });
+        ctx.createMediaStreamSource(stream).connect(node);
+        node.port.onmessage = (e) => { if (ws?.readyState === WebSocket.OPEN) ws.send(e.data); };
+        await fetch("/api/voice/reset", { method: "POST" });
+        await connect();
+      } catch (err) {
+        setStatus("Errore: " + (err.message || err), "error");
+        stop(false);
+      }
+    }
+
+    async function connect() {
+      const res = await fetch("/api/voice/token");
+      if (!res.ok) throw new Error(await res.text());
+      const { token } = await res.json();
+      sentTurns = new Set();
+      ws = new WebSocket(`${ASSEMBLY_URL}&token=${encodeURIComponent(token)}`);
+      ws.onmessage = (e) => onAssembly(JSON.parse(e.data));
+      ws.onclose = (e) => {
+        if (!active) return;
+        // sessione chiusa senza richiesta: si riconnette con un token nuovo
+        setStatus(`trascrizione interrotta (${e.code}${e.reason ? " " + e.reason : ""}), riconnessione…`, "error");
+        setTimeout(() => active && connect().catch((err) => setStatus("Errore: " + err.message, "error")), 1000);
+      };
+    }
+
+    function onAssembly(msg) {
+      if (msg.type === "Begin") setStatus("in ascolto", "ok");
+      if (msg.type !== "Turn") return;
+      const text = (msg.transcript || "").trim();
+      if (!msg.end_of_turn) return renderTranscript(text);
+      if (sentTurns.has(msg.turn_order)) return;
+      sentTurns.add(msg.turn_order);
+      renderTranscript("");
+      if (!text) return;
+      finals = [...finals, text].slice(-3);
+      renderTranscript("");
+      fetch("/api/voice/turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      }).then((r) => { if (!r.ok) r.text().then((t) => setStatus("Errore: " + t, "error")); });
+    }
+
+    function renderTranscript(partial) {
+      transcriptEl.replaceChildren(
+        ...finals.map((t) => Object.assign(document.createElement("div"), { className: "final", textContent: t })),
+        ...(partial ? [Object.assign(document.createElement("div"), { className: "partial", textContent: partial })] : []),
+      );
+    }
+
+    function stop(updateStatus = true) {
+      active = false;
+      toggleBtn.textContent = "Avvia ascolto";
+      toggleBtn.classList.remove("on");
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "Terminate" }));
+      ws = null;
+      stream?.getTracks().forEach((t) => t.stop());
+      stream = null;
+      ctx?.close();
+      ctx = null;
+      if (updateStatus) setStatus("fermo");
+    }
+
+    toggleBtn.addEventListener("click", () => (active ? stop() : start()));
+    // chiude la sessione AssemblyAI (fatturata finché resta aperta)
+    window.addEventListener("pagehide", () => active && stop());
+
+    // --- Risposte via SSE: la più recente in alto ---
+    const cards = new Map(); // id -> elemento
+    function renderVoice(v) {
+      let card = cards.get(v.id);
+      if (!card) {
+        $("empty")?.remove();
+        card = document.createElement("div");
+        card.className = "qa";
+        card.innerHTML = '<div class="q"></div><div class="a"></div><div class="err"></div>';
+        cards.set(v.id, card);
+        // inserimento in ordine di ts, per le risposte reinviate alla riconnessione
+        const after = [...listEl.children].find((c) => c.dataset.ts < v.ts);
+        card.dataset.ts = v.ts;
+        listEl.insertBefore(card, after || null);
+      }
+      card.classList.toggle("pending", !v.done);
+      card.querySelector(".q").textContent = new Date(v.ts).toLocaleTimeString("it-IT") + " — " + v.question;
+      card.querySelector(".a").textContent = v.answer;
+      card.querySelector(".err").textContent = v.error ? "Errore: " + v.error : v.fallback ? `(fallback: ${v.model})` : "";
+    }
+
+    function connectEvents() {
+      const es = new EventSource("/api/events");
+      es.onopen = () => { $("live").textContent = "live"; $("live").className = "on"; };
+      es.onerror = () => { $("live").textContent = "disconnesso"; $("live").className = "off"; };
+      es.addEventListener("voice", (e) => renderVoice(JSON.parse(e.data)));
+    }
+    connectEvents();
+  </script>
+</body>
+</html>

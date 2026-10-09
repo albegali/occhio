@@ -8,7 +8,7 @@ const CONFIG_PATH = path.join(ROOT, "config.json");
 const CONFIG_DEFAULT_PATH = path.join(ROOT, "config.default.json");
 
 // --- Env obbligatorie ---
-const { ANTHROPIC_API_KEY, ADMIN_PASSWORD, OPENAI_API_KEY } = process.env;
+const { ANTHROPIC_API_KEY, ADMIN_PASSWORD, OPENAI_API_KEY, ASSEMBLYAI_API_KEY } = process.env;
 if (!ANTHROPIC_API_KEY) {
   console.error("Errore: variabile d'ambiente ANTHROPIC_API_KEY mancante. Copia .env.example in .env e impostala.");
   process.exit(1);
@@ -18,6 +18,7 @@ if (!ADMIN_PASSWORD) {
   process.exit(1);
 }
 if (!OPENAI_API_KEY) console.warn("OPENAI_API_KEY non impostata: nessun fallback se Claude non risponde.");
+if (!ASSEMBLYAI_API_KEY) console.warn("ASSEMBLYAI_API_KEY non impostata: l'assistente vocale (/voice) non funziona.");
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 
@@ -201,6 +202,7 @@ app.use(express.json({ limit: "5mb" }));
 
 app.get("/", (req, res) => res.sendFile(path.join(ROOT, "public", "capture.html")));
 app.get("/output", (req, res) => res.sendFile(path.join(ROOT, "public", "output.html")));
+app.get("/voice", (req, res) => res.sendFile(path.join(ROOT, "public", "voice.html")));
 app.get("/admin", requireAuth, (req, res) => res.sendFile(path.join(ROOT, "public", "admin.html")));
 
 app.get("/api/client-config", (req, res) => {
@@ -239,6 +241,7 @@ app.get("/api/events", (req, res) => {
   sseClients.add(res);
   for (const b of blocks.values()) sseSend(res, "block", b);
   for (const r of results) if (r.error) sseSend(res, "result", r);
+  for (const v of voiceAnswers) sseSend(res, "voice", v);
   req.on("close", () => sseClients.delete(res));
 });
 
@@ -246,6 +249,105 @@ app.get("/api/events", (req, res) => {
 app.post("/api/reset", requireLoopback, (req, res) => {
   blocks.clear();
   res.status(204).end();
+});
+
+// --- Assistente vocale: trascrizione AssemblyAI nel browser, risposte di Claude in streaming via SSE ---
+const VOICE_SYSTEM =
+  "Ascolti in tempo reale una conversazione orale (es. un'interrogazione, un esame orale o un colloquio), trascritta automaticamente: " +
+  "la trascrizione può contenere errori, interpretala nel senso più plausibile. " +
+  "Quando viene posta una domanda rispondi in italiano, subito e in modo diretto: prima la risposta in una frase, poi al massimo 2-3 frasi di dettaglio utili da dire a voce. " +
+  "Niente preamboli, niente Markdown; formule in notazione testuale semplice.";
+const SKIP = "[SKIP]";
+const voiceTurns = []; // ultime frasi trascritte, usate come contesto
+const voiceAnswers = []; // ultime 20 risposte, reinviate a chi si collega
+
+function pushVoice(v) {
+  voiceAnswers.push(v);
+  if (voiceAnswers.length > 20) voiceAnswers.shift();
+}
+
+app.get("/api/voice/token", requireLoopback, async (req, res) => {
+  if (!ASSEMBLYAI_API_KEY) return res.status(503).send("ASSEMBLYAI_API_KEY non impostata nel file .env");
+  try {
+    const r = await fetch("https://streaming.assemblyai.com/v3/token?expires_in_seconds=60", { headers: { Authorization: ASSEMBLYAI_API_KEY } });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(502).send(`AssemblyAI ${r.status}: ${data.error || r.statusText}`);
+    res.json({ token: data.token });
+  } catch (err) {
+    res.status(502).send(`AssemblyAI non raggiungibile: ${err.message}`);
+  }
+});
+
+app.post("/api/voice/reset", requireLoopback, (req, res) => {
+  voiceTurns.length = 0;
+  res.status(204).end();
+});
+
+// Ogni frase conclusa arriva qui; la risposta parte subito e viene trasmessa a pezzi via SSE (evento "voice")
+app.post("/api/voice/turn", requireLoopback, async (req, res) => {
+  const text = String(req.body?.text || "").trim();
+  if (!text) return res.status(400).send("Campo text mancante");
+  const context = voiceTurns.slice(-6).join("\n");
+  voiceTurns.push(text);
+  if (voiceTurns.length > 20) voiceTurns.shift();
+  res.status(202).end();
+
+  const startedAt = Date.now();
+  const item = { id: `${startedAt}-${Math.random().toString(36).slice(2, 6)}`, ts: new Date().toISOString(), question: text, answer: "", done: false, model: config.model };
+  const prompt =
+    (context ? `Frasi precedenti della conversazione:\n${context}\n\n` : "") +
+    `Ultima frase trascritta:\n"${text}"\n\n` +
+    "Se l'ULTIMA frase contiene una domanda nuova (o completa una domanda iniziata nelle frasi precedenti), rispondi. " +
+    `Se non c'è una domanda nuova, rispondi esattamente ${SKIP} e nient'altro.`;
+  let shown = false;
+  const emit = () => {
+    if (!shown) {
+      // si aspetta qualche carattere per riconoscere SKIP prima di mostrare qualcosa
+      if (!item.done && item.answer.length < SKIP.length) return;
+      if (item.answer.trim().startsWith(SKIP)) return false;
+      shown = true;
+      pushVoice(item);
+    }
+    broadcast("voice", item);
+  };
+
+  let usage = { input_tokens: 0, output_tokens: 0 };
+  try {
+    const stream = anthropic.messages.stream({
+      model: config.model,
+      max_tokens: config.maxTokens,
+      system: VOICE_SYSTEM,
+      messages: [{ role: "user", content: prompt }],
+    });
+    stream.on("text", (delta) => {
+      item.answer += delta;
+      if (emit() === false) stream.abort();
+    });
+    const final = await stream.finalMessage();
+    usage = { input_tokens: final.usage.input_tokens, output_tokens: final.usage.output_tokens };
+    if (final.stop_reason === "max_tokens") item.error = "Risposta troncata: aumenta maxTokens dall'admin";
+  } catch (err) {
+    if (item.answer.trim().startsWith(SKIP)) {
+      // stream interrotto da noi: nessuna domanda
+    } else if (!item.answer && OPENAI_API_KEY) {
+      console.error(`voce: Claude non risponde (${err.message}), fallback su ${config.fallbackModel}`);
+      try {
+        const r = await callOpenAI({ system: VOICE_SYSTEM, text: prompt, maxTokens: config.maxTokens });
+        item.answer = r.text;
+        item.model = r.model;
+        item.fallback = true;
+        usage = r.usage;
+      } catch (err2) {
+        item.error = `Claude: ${err.message} — fallback: ${err2.message}`;
+      }
+    } else {
+      item.error = err.message || String(err);
+    }
+  }
+  item.done = true;
+  const skipped = item.answer.trim().startsWith(SKIP) && !item.error;
+  if (!skipped) emit();
+  console.log(`voce ts=${item.ts} durata=${Date.now() - startedAt}ms in=${usage.input_tokens} out=${usage.output_tokens} ${skipped ? "nessuna domanda" : item.error ? `ERRORE: ${item.error}` : "risposta"}`);
 });
 
 let busy = false;

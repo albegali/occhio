@@ -6,6 +6,7 @@ Cattura su Mac lo stream di una capture card HDMI, lo mostra a schermo e, quando
 |---|---|---|
 | Capture + Output | `http://localhost:3000/` | Anteprima, controlli a hover e tabella domande/risposte |
 | Output | `http://<nome-mac>.local:3000/output` | Output dell'AI, aggiornato a ogni elaborazione |
+| Voce | `http://localhost:3000/voice` | Assistente vocale: ascolta l'audio e risponde subito alle domande orali |
 | Admin | `http://localhost:3000/admin` | Prompt e parametri (protetta da password) |
 
 ## Requisiti
@@ -32,6 +33,15 @@ Poi, sul Mac con la capture card:
 4. Apri `/output` su un altro schermo, tablet o telefono della stessa rete.
 
 > Se il browser non chiede il permesso: Impostazioni di Sistema → Privacy e sicurezza → Fotocamera → abilita il browser.
+
+### Assistente vocale (`/voice`)
+
+1. Aggiungi `ASSEMBLYAI_API_KEY` al file `.env` e riavvia.
+2. Apri `http://localhost:3000/voice` sul Mac, scegli l'ingresso audio (microfono o audio della capture card) e premi **Avvia ascolto**.
+3. L'audio viene trascritto in tempo reale da AssemblyAI (modello `universal-3-6-pro`, supporta l'italiano). A ogni frase conclusa, Claude decide se contiene una domanda e, in caso affermativo, risponde in streaming: la risposta appare mentre viene generata. Le frasi senza domande vengono scartate.
+4. Aperta da un altro dispositivo in LAN, `/voice` mostra le risposte in sola lettura (l'ascolto si avvia solo dal Mac).
+
+Usa il modello e i max token impostati in admin; il prompt dell'assistente vocale è fisso in `server.js` (`VOICE_SYSTEM`). Funziona in Chrome, Edge e Safari (non in Firefox).
 
 ## Configurazione
 
@@ -62,7 +72,7 @@ Ogni analisi fa una chiamata di estrazione con l'immagine (un frame a 1280×720 
 ## Limiti noti
 
 - Le sorgenti protette da HDCP (Netflix, alcune console, alcuni decoder) arrivano nere alla capture card: è una limitazione hardware, non dell'app.
-- Nessun audio, nessuna registrazione, nessuno storico persistente (gli ultimi 10 risultati restano in memoria finché il server è attivo).
+- Nessuna registrazione, nessuno storico persistente (gli ultimi 10 risultati restano in memoria finché il server è attivo).
 
 ## Sviluppo con Claude Code
 
