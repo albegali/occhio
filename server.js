@@ -162,8 +162,8 @@ const EXTRACT_SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { key: { type: "string" }, question: { type: "string" } },
-        required: ["key", "question"],
+        properties: { key: { type: "string" }, question: { type: "string" }, dependsOn: { type: "string" } },
+        required: ["key", "question", "dependsOn"],
         additionalProperties: false,
       },
     },
@@ -181,10 +181,20 @@ function extractPrompt() {
     "Includi SOLO i blocchi visibili per intero: ignora quelli tagliati in alto o in basso, verranno trascritti quando saranno interamente visibili. " +
     'Per ogni blocco restituisci "key", un identificativo stabile (solo il numero della domanda se presente, es. "3", altrimenti le prime 6 parole del blocco), ' +
     'e "question", la trascrizione fedele e completa di domanda e opzioni (con le loro lettere). ' +
-    "Preserva formule e notazione matematica in LaTeX inline ($...$): esponenti, pedici, frazioni, radici, vettori, matrici, simboli greci e operatori." +
+    "Preserva formule e notazione matematica in LaTeX inline ($...$): esponenti, pedici, frazioni, radici, vettori, matrici, simboli greci e operatori. " +
+    "Una domanda composta da più parti (es. un risultato da calcolare o un'opzione da scegliere, seguiti da un campo di testo come \"Come sei giunto al risultato?\" o \"Quali teoremi hai applicato?\", oppure sotto-punti a, b, c) è UN SOLO blocco: " +
+    "trascrivi tutte le parti nell'ordine, ciascuna su una riga che inizia con \"Parte 1:\", \"Parte 2:\"… e indica se è a risposta chiusa o aperta. " +
+    "Campi o richieste senza numero proprio appartengono alla domanda numerata che li precede; se quella parte non è visibile per intero, ignora il blocco. " +
+    'Se una domanda con numero proprio fa riferimento esplicito a un\'altra (es. "riferendoti alla domanda 3"), metti in "dependsOn" la key di quella domanda, altrimenti stringa vuota.' +
     (seen.length ? `\nBlocchi già trascritti, da NON includere: ${seen.join(" | ")}` : "")
   );
 }
+
+// Regole fisse per le risposte, in aggiunta al prompt di default modificabile dall'admin
+const ANSWER_RULES =
+  "Se la domanda ha più parti, rispondi a TUTTE nell'ordine, etichettandole come nella domanda (Parte 1, Parte 2…). " +
+  "Le parti aperte devono essere coerenti con le risposte chiuse: se chiedono come sei giunto al risultato o quali teoremi hai applicato, " +
+  "descrivi il procedimento che porta proprio a quel risultato, citando teoremi e formule usati.";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -262,26 +272,34 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
     for (const b of JSON.parse(extracted.text).blocks) {
       const k = normKey(b.key);
       if (!k || blocks.has(k)) continue;
-      const block = { key: b.key, question: b.question, answer: null, ts: result.ts };
+      const block = { key: b.key, question: b.question, dependsOn: b.dependsOn || "", answer: null, ts: result.ts };
       blocks.set(k, block);
       fresh.push(block);
       broadcast("block", block);
     }
 
-    // 2. risposte: una chiamata testuale per domanda, in parallelo (l'ordine lo tiene il client)
-    await Promise.all(
-      fresh.map(async (block) => {
-        try {
-          const r = track(await callLLM({ system: config.systemPrompt, text: `${config.defaultPrompt}\n\nDomanda:\n${block.question}`, maxTokens: config.maxTokens }));
-          block.answer = r.text;
-          block.model = r.model;
-        } catch (err) {
-          block.error = err.message || String(err);
-          console.error(`domanda ${block.key} ERRORE: ${block.error}`);
-        }
-        broadcast("block", block);
-      })
-    );
+    // 2. risposte: una chiamata testuale per domanda, in parallelo (l'ordine lo tiene il client).
+    // Una domanda che dipende da un'altra aspetta la sua risposta e la riceve come contesto.
+    const pending = new Map(); // chiave normalizzata -> promise della risposta in questo frame
+    const answer = async (block) => {
+      const dep = block.dependsOn && blocks.get(normKey(block.dependsOn));
+      // si aspetta solo una domanda precedente: evita attese circolari (3 dipende da 4 e 4 da 3)
+      if (dep && dep.key.localeCompare(block.key, "it", { numeric: true }) < 0) await pending.get(normKey(dep.key));
+      const context = dep?.answer ? `Domanda collegata (${dep.key}):\n${dep.question}\nRisposta già data:\n${dep.answer}\n\n` : "";
+      try {
+        const r = track(await callLLM({ system: config.systemPrompt, text: `${config.defaultPrompt}\n\n${ANSWER_RULES}\n\n${context}Domanda:\n${block.question}`, maxTokens: config.maxTokens }));
+        block.answer = r.text;
+        block.model = r.model;
+      } catch (err) {
+        block.error = err.message || String(err);
+        console.error(`domanda ${block.key} ERRORE: ${block.error}`);
+      }
+      broadcast("block", block);
+    };
+    // in ordine di chiave: quando parte una dipendente, la promise della domanda precedente è già registrata
+    fresh.sort((a, b) => a.key.localeCompare(b.key, "it", { numeric: true }));
+    for (const block of fresh) pending.set(normKey(block.key), answer(block));
+    await Promise.all(pending.values());
 
     result.newKeys = fresh.map((b) => b.key);
     result.usage = usage;
