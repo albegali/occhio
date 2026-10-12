@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HDMI Vision — Output</title>
+<link rel="stylesheet" href="/katex/katex.min.css">
+<script src="/katex/katex.min.js"></script>
+<script src="/katex/contrib/auto-render.min.js"></script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -19,10 +22,12 @@
   #live.off { background: #4b1e1e; color: #e09b9b; }
   #ts { color: #9a9aa0; }
   #empty { color: #6a6a70; font-style: italic; font-size: 2rem; padding: 20px 40px; }
-  table { width: 100%; border-collapse: collapse; }
-  td { width: 50%; vertical-align: top; padding: 20px 28px; border-bottom: 1px solid #2a2a2e; font-size: 2rem; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  td { vertical-align: top; padding: 20px 28px; border-bottom: 1px solid #2a2a2e; font-size: 2rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+  td:first-child { width: 22%; }
   td + td { border-left: 1px solid #2a2a2e; }
   tr.error td { color: #e09b9b; }
+  .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
 </style>
 </head>
 <body>
@@ -46,7 +51,13 @@
       if (na !== nb) return na ? -1 : 1; // chiavi non numeriche in coda
       return a.localeCompare(b, "it", { numeric: true });
     };
-    const short = (s, n = 80) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
+    const MATH = { delimiters: [{ left: "$$", right: "$$", display: true }, { left: "$", right: "$", display: false }, { left: "\\[", right: "\\]", display: true }, { left: "\\(", right: "\\)", display: false }], throwOnError: false };
+    // Testo + formule LaTeX renderizzate con KaTeX (se caricato)
+    function setMath(el, text) {
+      el.textContent = text.replace(/\*\*/g, ""); // eventuale grassetto Markdown sfuggito al prompt
+      if (window.renderMathInElement) renderMathInElement(el, MATH);
+    }
+    const short = (s, n = 30) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
 
     function makeRow() {
       document.getElementById("empty")?.remove();
@@ -71,7 +82,8 @@
       const [c1, c2] = tr.children;
       c1.textContent = `Domanda ${b.key} (${short(b.question)})`;
       c1.title = b.question;
-      c2.textContent = b.error ? "Errore: " + b.error : b.answer ?? "…";
+      if (b.error) c2.textContent = "Errore: " + b.error;
+      else setMath(c2, b.answer ?? "…");
       tr.className = b.error ? "error" : "";
       if (b.answer || b.error) touch();
     }

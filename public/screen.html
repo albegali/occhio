@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDMI Vision — Screen</title>
+<link rel="stylesheet" href="/katex/katex.min.css">
+<script src="/katex/katex.min.js"></script>
+<script src="/katex/contrib/auto-render.min.js"></script>
+<style>
+  :root { color-scheme: dark; --side: 150px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #e8e8ea; font-family: -apple-system, system-ui, sans-serif; }
+  body.idle { cursor: none; }
+  #stage { position: fixed; top: 0; bottom: 0; left: 0; right: var(--side); overflow: hidden; background: #000; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; transition: transform 0.15s; }
+  #bar {
+    position: fixed; top: 12px; left: calc((100% - var(--side)) / 2); transform: translateX(-50%); display: flex; gap: 8px;
+    padding: 8px; background: rgba(20, 20, 24, 0.85); border-radius: 10px; transition: opacity 0.3s;
+  }
+  #side {
+    position: fixed; top: 0; right: 0; bottom: 0; width: var(--side); display: flex; flex-direction: column; gap: 10px;
+    padding: 10px; background: #0b0b0d; border-left: 1px solid #2a2a2e;
+  }
+  #controls { display: flex; flex-direction: column; gap: 8px; align-items: stretch; transition: opacity 0.3s; }
+  body.idle #bar, body.idle #controls { opacity: 0; pointer-events: none; }
+  select, button, .hbtn {
+    background: #232327; color: #e8e8ea; border: 1px solid #3a3a3f; border-radius: 6px;
+    padding: 8px 10px; font-size: 14px; max-width: 60vw;
+  }
+  button { cursor: pointer; }
+  #zoomRow { display: flex; gap: 6px; align-items: center; }
+  .zoom { flex: 1; height: 44px; font-size: 22px; padding: 0; }
+  #zoomLevel { font-size: 12px; color: #9a9aa0; background: none; border: none; padding: 2px; }
+  .hbtn { position: relative; overflow: hidden; cursor: pointer; user-select: none; text-align: center; padding: 12px 6px; }
+  .hbtn span { position: relative; z-index: 1; }
+  .hbtn i { position: absolute; inset: 0 auto 0 0; width: 0; background: #2f6f3e; }
+  .hbtn.arming i { width: 100%; transition: width 3s linear; }
+  .hbtn.fired { border-color: #3f8f4f; }
+  #status { padding: 3px 6px; border-radius: 4px; font-size: 12px; text-align: center; overflow-wrap: anywhere; }
+  #status.ok { background: #1e4b26; color: #9be0a6; }
+  #status.progress { background: #4b3d1e; color: #e0c99b; }
+  #status.error { background: #4b1e1e; color: #e09b9b; }
+  #status.idle { background: #2a2a2e; color: #9a9aa0; }
+  #answers {
+    flex: 1; min-height: 0; overflow-y: auto; margin: 0; border-top: 1px solid #2a2a2e; padding-top: 10px;
+    font: 600 1.5rem/1.5 ui-monospace, Menlo, monospace; white-space: pre;
+  }
+  #answers div { padding: 0 6px; border-radius: 4px; cursor: default; }
+  #answers div:hover { background: #2a2a2e; }
+  #detail {
+    position: fixed; top: 16px; bottom: 16px; right: calc(var(--side) + 16px); width: min(900px, calc(100% - var(--side) - 32px));
+    overflow-y: auto; padding: 20px 24px; background: rgba(11, 11, 13, 0.94); border: 1px solid #3a3a3f; border-radius: 12px;
+    font-size: 1.4rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  #detail[hidden] { display: none; }
+  #detailClose {
+    position: sticky; top: 0; float: right; margin: -8px -10px 0 8px; width: 32px; height: 32px; padding: 0;
+    font-size: 18px; line-height: 1; border-radius: 50%; background: #232327;
+  }
+  #detail h2 { margin: 0 0 12px; font-size: 1rem; font-weight: 600; color: #9a9aa0; white-space: normal; }
+  #detail.error #detailText { color: #e09b9b; }
+  .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
+  #msg { position: fixed; top: 0; bottom: 0; left: 0; right: var(--side); display: grid; place-items: center; color: #9a9aa0; font-size: 1.2rem; pointer-events: none; }
+</style>
+</head>
+<body>
+  <div id="stage"><video id="video" autoplay playsinline muted></video></div>
+  <canvas id="canvas" hidden></canvas>
+  <div id="msg">Avvio stream…</div>
+  <div id="bar">
+    <select id="device"></select>
+    <button id="fs">Schermo intero</button>
+  </div>
+  <div id="side">
+    <div id="controls">
+      <div class="hbtn" id="analyzeBtn" title="Tieni il mouse sopra per 3 secondi"><i></i><span>Avvia analisi</span></div>
+      <div id="status" class="idle">pronto</div>
+      <div id="zoomRow">
+        <button class="zoom" id="zoomOut" title="Zoom out">−</button>
+        <button id="zoomLevel" title="Ripristina">100%</button>
+        <button class="zoom" id="zoomIn" title="Zoom in">+</button>
+      </div>
+    </div>
+    <div id="answers"></div>
+  </div>
+  <div id="detail" hidden>
+    <button id="detailClose" title="Chiudi">✕</button>
+    <h2 id="detailTitle"></h2>
+    <div id="detailText"></div>
+  </div>
+  <script>
+    const KEY = "hdmiVision.deviceId";
+    const HOVER_MS = 3000;
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const deviceSelect = document.getElementById("device");
+    const msg = document.getElementById("msg");
+    const statusEl = document.getElementById("status");
+    const side = document.getElementById("side");
+    let stream = null;
+    let clientConfig = { imageMaxWidth: 1280, jpegQuality: 0.7 };
+    let inFlight = false;
+
+    // --- Stream ---
+    async function listDevices() {
+      const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+      deviceSelect.innerHTML = "";
+      for (const d of devices) {
+        const opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `Camera ${deviceSelect.length + 1}`;
+        deviceSelect.append(opt);
+      }
+    }
+
+    async function start(deviceId) {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: 1920, height: 1080 },
+          audio: false,
+        });
+        video.srcObject = stream;
+        msg.textContent = "";
+        const current = stream.getVideoTracks()[0].getSettings().deviceId;
+        await listDevices(); // le label sono disponibili solo dopo il permesso
+        deviceSelect.value = current;
+        try { localStorage.setItem(KEY, current); } catch (e) {}
+      } catch (e) {
+        if (deviceId && e.name === "OverconstrainedError") return start(null); // device salvato non più presente
+        msg.textContent = "Errore stream: " + e.message;
+      }
+    }
+
+    deviceSelect.onchange = () => start(deviceSelect.value);
+
+    const toggleFs = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen());
+    document.getElementById("fs").onclick = toggleFs;
+    video.ondblclick = toggleFs;
+
+    // --- Zoom centrato, da 100% a 400% ---
+    let zoom = 1;
+    function setZoom(z) {
+      zoom = Math.min(4, Math.max(1, Math.round(z * 100) / 100));
+      video.style.transform = `scale(${zoom})`;
+      document.getElementById("zoomLevel").textContent = Math.round(zoom * 100) + "%";
+    }
+    document.getElementById("zoomIn").onclick = () => setZoom(zoom + 0.25);
+    document.getElementById("zoomOut").onclick = () => setZoom(zoom - 0.25);
+    document.getElementById("zoomLevel").onclick = () => setZoom(1);
+
+    // --- Analisi: stessa logica della pagina Capture ---
+    function setStatus(kind, text) {
+      statusEl.className = kind;
+      statusEl.textContent = text;
+    }
+
+    // Pulsante che scatta solo dopo HOVER_MS di hover continuo; per ripetere bisogna uscire e rientrare
+    function hoverButton(el, action) {
+      let timer = null;
+      el.addEventListener("mouseenter", () => {
+        if (el.classList.contains("fired")) return;
+        el.classList.add("arming");
+        timer = setTimeout(() => {
+          el.classList.remove("arming");
+          el.classList.add("fired");
+          action();
+        }, HOVER_MS);
+      });
+      el.addEventListener("mouseleave", () => {
+        clearTimeout(timer);
+        el.classList.remove("arming", "fired");
+      });
+    }
+
+    function captureFrameBase64() {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) return null;
+      const scale = Math.min(1, clientConfig.imageMaxWidth / vw);
+      canvas.width = Math.round(vw * scale);
+      canvas.height = Math.round(vh * scale);
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height); // frame intero, lo zoom è solo visivo
+      return canvas.toDataURL("image/jpeg", clientConfig.jpegQuality).split(",")[1];
+    }
+
+    async function analyze() {
+      if (inFlight) return;
+      const image = captureFrameBase64();
+      if (!image) return setStatus("error", "nessun video");
+      inFlight = true;
+      setStatus("progress", "in corso");
+      try {
+        const res = await fetch("/api/frame", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image }),
+        });
+        if (res.status === 409) return setStatus("progress", "già in corso");
+        const data = await res.json();
+        if (data.error) return setStatus("error", "errore: " + data.error);
+        setStatus("ok", data.duplicate ? "ok (niente di nuovo)" : "ok");
+      } catch (e) {
+        setStatus("error", "errore di rete");
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    hoverButton(document.getElementById("analyzeBtn"), analyze);
+
+    // --- Elenco risposte: "numero domanda: numero opzione" ---
+    const blocks = new Map(); // key -> block
+    const compareKeys = (a, b) => {
+      const na = /^\d/.test(a), nb = /^\d/.test(b);
+      if (na !== nb) return na ? -1 : 1;
+      return a.localeCompare(b, "it", { numeric: true });
+    };
+    // Dalla riga "Risposta: B) …" ricava il numero dell'opzione (A=1, B=2…; se l'opzione è già un numero lo usa)
+    function optionNumber(b) {
+      if (b.error) return "!";
+      if (b.answer == null) return "…";
+      const m = b.answer.match(/Risposta:\s*\$?\(?([A-Za-z]|\d+)\s*[).:]/);
+      if (!m) return "?";
+      return /\d/.test(m[1]) ? m[1] : String(m[1].toUpperCase().charCodeAt(0) - 64);
+    }
+    // Riquadro sopra lo stream con la risposta completa, come nella pagina Capture
+    const answersEl = document.getElementById("answers");
+    const detail = document.getElementById("detail");
+    const MATH = { delimiters: [{ left: "$$", right: "$$", display: true }, { left: "$", right: "$", display: false }, { left: "\\[", right: "\\]", display: true }, { left: "\\(", right: "\\)", display: false }], throwOnError: false };
+    let shownKey = null;
+    function showDetail(key) {
+      const b = blocks.get(key);
+      if (!b) return hideDetail();
+      shownKey = key;
+      document.getElementById("detailTitle").textContent = `Domanda ${b.key}`;
+      const text = document.getElementById("detailText");
+      detail.className = b.error ? "error" : "";
+      if (b.error) text.textContent = "Errore: " + b.error;
+      else {
+        text.textContent = (b.answer ?? "…").replace(/\*\*/g, "");
+        if (window.renderMathInElement) renderMathInElement(text, MATH);
+      }
+      detail.hidden = false;
+    }
+    function hideDetail() {
+      clearTimeout(hideTimer);
+      shownKey = null;
+      detail.hidden = true;
+    }
+    // Il riquadro resta aperto finché il mouse è sull'elenco o sul riquadro stesso;
+    // il breve ritardo permette di attraversare lo spazio tra i due senza chiuderlo.
+    let hideTimer;
+    const scheduleHide = () => { clearTimeout(hideTimer); hideTimer = setTimeout(hideDetail, 400); };
+    const cancelHide = () => clearTimeout(hideTimer);
+    answersEl.addEventListener("mouseover", (e) => {
+      cancelHide();
+      const key = e.target.closest("[data-key]")?.dataset.key;
+      if (key && key !== shownKey) showDetail(key);
+    });
+    answersEl.addEventListener("mouseleave", scheduleHide);
+    detail.addEventListener("mouseenter", cancelHide);
+    detail.addEventListener("mouseleave", scheduleHide);
+    document.getElementById("detailClose").onclick = hideDetail;
+
+    function renderAnswers() {
+      const sorted = [...blocks.values()].sort((a, b) => compareKeys(a.key, b.key));
+      answersEl.replaceChildren(...sorted.map((b) => {
+        const div = document.createElement("div");
+        div.textContent = `${b.key.replace(/^0+(?=\d)/, "")}: ${optionNumber(b)}`;
+        div.dataset.key = b.key;
+        return div;
+      }));
+      if (shownKey) showDetail(shownKey); // aggiorna il riquadro aperto se la risposta è cambiata
+    }
+
+    function connectEvents() {
+      const es = new EventSource("/api/events");
+      es.addEventListener("block", (ev) => {
+        const b = JSON.parse(ev.data);
+        blocks.set(b.key, b);
+        renderAnswers();
+      });
+      es.addEventListener("config", (ev) => { clientConfig = { ...clientConfig, ...JSON.parse(ev.data) }; });
+      // Riconnessione: il server reinvia tutti i blocchi della sessione
+      es.onopen = () => { blocks.clear(); renderAnswers(); };
+    }
+
+    // --- Barra e cursore spariscono dopo 2 s senza movimento (non mentre il mouse è sulla barra laterale) ---
+    let idleTimer;
+    function goIdle() {
+      if (side.matches(":hover")) idleTimer = setTimeout(goIdle, 2000);
+      else document.body.classList.add("idle");
+    }
+    function wake() {
+      document.body.classList.remove("idle");
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(goIdle, 2000);
+    }
+    document.addEventListener("mousemove", wake);
+    wake();
+
+    (async function init() {
+      try { clientConfig = await (await fetch("/api/client-config")).json(); } catch (e) {}
+      connectEvents();
+      let saved = null;
+      try { saved = localStorage.getItem(KEY); } catch (e) {}
+      start(saved);
+    })();
+  </script>
+</body>
+</html>

@@ -13,7 +13,7 @@ App locale per un Mac che riceve il video di una **capture card HDMI** (disposit
 ## Stack (non negoziabile per l'MVP)
 
 - Node.js ≥ 20, ES modules, **nessun build step**.
-- Dipendenze runtime ammesse: `express`, `@anthropic-ai/sdk`. Nient'altro senza chiederlo.
+- Dipendenze runtime ammesse: `express`, `@anthropic-ai/sdk`, `katex` (servito da `/katex` per le formule in capture e output). Nient'altro senza chiederlo.
 - Frontend: HTML + JS vanilla inline, nessun framework, nessuna libreria CDN.
 - Persistenza: un file `config.json`. Nessun database.
 - Aggiornamenti live: Server-Sent Events (SSE). Niente WebSocket.
@@ -26,6 +26,7 @@ public/capture.html  # pagina 1: video + cattura frame
 public/output.html   # pagina 2: output AI live
 public/admin.html    # area di amministrazione
 public/voice.html    # assistente vocale (AssemblyAI + Claude)
+public/screen.html   # stream della capture card a tutta pagina
 config.default.json  # valori di default (versionato)
 config.json          # config attiva (gitignored, creata al primo avvio)
 .env.example
@@ -37,14 +38,13 @@ Non creare altri file o cartelle se non strettamente necessari.
 
 ```json
 {
-  "systemPrompt": "Sei un assistente che legge schermate provenienti da una sorgente video HDMI che mostrano questionari o quiz, spesso più lunghi dello schermo e fatti scorrere un po' alla volta. Rispondi in italiano, in modo conciso.",
-  "defaultPrompt": "Rispondi a ogni domanda visibile. Per ciascuna indica la risposta corretta (lettera e testo dell'opzione) e una motivazione di una riga. Se la domanda è aperta, rispondi in 1-3 frasi.",
-  "model": "claude-haiku-4-5-20251001",
+  "systemPrompt": "Sei un esperto che risponde a domande di questionari, quiz ed esami su qualsiasi materia (matematica, fisica, statistica, economia, informatica, diritto, cultura generale…), lette da schermate di una sorgente video HDMI. Conta prima di tutto l'affidabilità: leggi la domanda con attenzione, simbolo per simbolo, prima di rispondere. Non inventare e non dare per scontato nulla che non sia scritto: se un dato non si legge, dillo invece di indovinarlo. Nei problemi matematici svolgi i calcoli con cura e verifica il risultato prima di scegliere l'opzione. Rispondi in italiano, in modo conciso.",
+  "defaultPrompt": "Rispondi alla domanda. Se è a scelta multipla indica l'opzione corretta (lettera e testo completo dell'opzione) e una motivazione breve; per i calcoli riporta solo i passaggi essenziali e la verifica. Se è aperta, rispondi in 1-3 frasi.",
+  "model": "claude-sonnet-5-5",
   "fallbackModel": "gpt-5-mini",
-  "maxTokens": 1000,
-  "intervalSec": 30,
-  "imageMaxWidth": 1280,
-  "jpegQuality": 0.7
+  "maxTokens": 16000,
+  "imageMaxWidth": 1920,
+  "jpegQuality": 0.85
 }
 ```
 
@@ -61,6 +61,7 @@ Variabili d'ambiente (`.env`): `ANTHROPIC_API_KEY` (obbligatoria), `ADMIN_PASSWO
 | POST | `/api/frame` | **solo loopback** | body `{ image: "<base64 jpeg senza prefisso>" }` → chiama Claude, risponde con il risultato e lo trasmette via SSE |
 | POST | `/api/reset` | **solo loopback** | svuota i blocchi già elaborati (chiamato da Capture a ogni "Avvia analisi") |
 | GET | `/api/events` | pubblico | stream SSE; all'apertura invia le domande della sessione (`block`) e gli ultimi errori di frame |
+| GET | `/screen` | pubblico | `screen.html`: stream a tutta pagina |
 | GET | `/voice` | pubblico | `voice.html`: assistente vocale |
 | GET | `/api/voice/token` | **solo loopback** | token temporaneo AssemblyAI (60 s) per il WebSocket di streaming |
 | POST | `/api/voice/turn` | **solo loopback** | body `{ text }` (frase conclusa) → `202`; Claude risponde in streaming via evento SSE `voice` se c'è una domanda |
@@ -73,13 +74,13 @@ Evento SSE `block`: `{ key, question, answer (null = in attesa), model?, error?,
 
 ## Comportamenti obbligatori
 
-1. **Pipeline**: (a) estrazione: una chiamata con `[image, prompt fisso di trascrizione]` → JSON `{ blocks: [{ key, question, dependsOn }] }`, formule in LaTeX; una domanda con più parti (chiusa + aperta, sotto-punti) è un solo blocco con tutte le parti, e `dependsOn` collega una domanda che ne cita un'altra; (b) risposta: una chiamata solo testo per ogni domanda nuova, `defaultPrompt` + regole fisse (rispondere a tutte le parti in modo coerente) + `question`, in parallelo; chi ha `dependsOn` aspetta la risposta collegata e la riceve come contesto. `system = systemPrompt`, `max_tokens = maxTokens`. Fallback: se Claude lancia un errore API e c'è `OPENAI_API_KEY`, la stessa chiamata va a OpenAI (`fallbackModel`, via `fetch`). Il troncamento non fa scattare il fallback. I client ordinano le domande per chiave (numerica), non per arrivo.
+1. **Pipeline**: (a) estrazione: una chiamata con `[image, prompt fisso di trascrizione]` → JSON `{ blocks: [{ key, question, dependsOn }] }`, formule in LaTeX; una domanda con più parti (chiusa + aperta, sotto-punti) è un solo blocco con tutte le parti, e `dependsOn` collega una domanda che ne cita un'altra; (b) risposta: una chiamata per ogni domanda nuova con `[image, defaultPrompt + regole fisse + question]` (l'immagine corregge eventuali errori di trascrizione; rispondere a tutte le parti in modo coerente, prima riga "Risposta: …", verificare l'opzione, niente ipotesi inventate), in parallelo; chi ha `dependsOn` aspetta la risposta collegata e la riceve come contesto. `system = systemPrompt`, `max_tokens = maxTokens`. Fallback: se Claude lancia un errore API e c'è `OPENAI_API_KEY`, la stessa chiamata va a OpenAI (`fallbackModel`, via `fetch`). Anche un rifiuto (`stop_reason: refusal`) fa scattare il fallback; il troncamento no. I client ordinano le domande per chiave (numerica), non per arrivo.
 2. **Nessuna sovrapposizione**: se un'elaborazione è in corso, il server risponde `409` al frame successivo e il client lo salta. Mai due chiamate in parallelo.
 3. **Risparmio token**: il client ridimensiona il frame a `imageMaxWidth` (mantenendo le proporzioni) e lo codifica JPEG a `jpegQuality` prima dell'invio. 1280×720 ≈ 1.200 token di input per immagine. Nessuna cronologia di conversazione: ogni chiamata è indipendente.
 4. **Protezione dei costi**: `/api/frame` accetta solo richieste da `127.0.0.1` / `::1` / `::ffff:127.0.0.1`; altrimenti `403`. Limite body JSON 5 MB.
 5. **Errori**: un errore dell'API non fa crashare il server; viene trasmesso come evento `result` con campo `error` e mostrato in entrambe le pagine.
 6. **Cronologia**: il server tiene in memoria solo gli ultimi 10 risultati (`GET /api/latest` restituisce l'ultimo). Nessuna persistenza su disco dei risultati.
-7. **Blocchi incrementali**: l'estrazione considera solo i blocchi visibili per intero, `key` = numero della domanda, ed esclude le chiavi già viste nella sessione. Il server scarta comunque le chiavi già viste; se non resta nessuna domanda nuova non parte nessuna chiamata di risposta e `/api/frame` risponde con `duplicate: true`.
+7. **Blocchi incrementali**: l'estrazione considera solo i blocchi visibili per intero, `key` = numero della domanda, e trascrive anche le domande già viste. Il server scarta quelle già viste con lo stesso testo (spazi ignorati); se il testo è cambiato (es. opzioni prima mancanti) la domanda viene sovrascritta e ririsposta. Se non resta nessuna domanda nuova o cambiata non parte nessuna chiamata di risposta e `/api/frame` risponde con `duplicate: true`.
 8. **Config a caldo**: le modifiche dall'admin valgono dalla chiamata successiva, senza riavvio. Il client Capture, ricevendo l'evento SSE `config`, riallinea l'intervallo.
 
 ## Requisiti UI
@@ -96,7 +97,7 @@ Evento SSE `block`: `{ key, question, answer (null = in attesa), model?, error?,
 
 **Admin (`/admin`)**
 - Form con tutti i campi di `config.json`, textarea ampie per i due prompt, pulsante Salva con conferma, pulsante "Ripristina default" (da `config.default.json`).
-- Validazione server: `intervalSec` 5–3600, `maxTokens` 50–4000, `imageMaxWidth` 320–1920, `jpegQuality` 0.3–0.95, stringhe non vuote.
+- Validazione server: `intervalSec` 5–3600, `maxTokens` 50–32000, `imageMaxWidth` 320–1920, `jpegQuality` 0.3–0.95, stringhe non vuote.
 
 Stile: CSS minimo inline, dark mode di default, nessuna libreria.
 

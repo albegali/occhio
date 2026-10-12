@@ -45,7 +45,7 @@ function validateConfig(body) {
   if (!isNonEmptyString(body.defaultPrompt)) errors.push("defaultPrompt non valido");
   if (!isNonEmptyString(body.model)) errors.push("model non valido");
   if (!isNonEmptyString(body.fallbackModel)) errors.push("fallbackModel non valido");
-  if (!Number.isFinite(body.maxTokens) || body.maxTokens < 50 || body.maxTokens > 4000) errors.push("maxTokens deve essere tra 50 e 4000");
+  if (!Number.isFinite(body.maxTokens) || body.maxTokens < 50 || body.maxTokens > 32000) errors.push("maxTokens deve essere tra 50 e 32000");
   if (!Number.isFinite(body.imageMaxWidth) || body.imageMaxWidth < 320 || body.imageMaxWidth > 1920) errors.push("imageMaxWidth deve essere tra 320 e 1920");
   if (!Number.isFinite(body.jpegQuality) || body.jpegQuality < 0.3 || body.jpegQuality > 0.95) errors.push("jpegQuality deve essere tra 0.3 e 0.95");
   return errors;
@@ -107,6 +107,7 @@ async function callClaude({ system, image, text, schema, maxTokens }) {
     ...(schema && { output_config: { format: { type: "json_schema", schema } } }),
   });
   if (response.stop_reason === "max_tokens") throw new TruncatedError("Risposta troncata: aumenta maxTokens dall'admin");
+  if (response.stop_reason === "refusal") throw new Error("Claude ha rifiutato la richiesta");
   return {
     text: response.content.filter((b) => b.type === "text").map((b) => b.text).join(""),
     model: config.model,
@@ -173,8 +174,9 @@ const EXTRACT_SCHEMA = {
   additionalProperties: false,
 };
 
+const sameText = (a, b) => a.replace(/\s+/g, "") === b.replace(/\s+/g, "");
+
 function extractPrompt() {
-  const seen = [...blocks.values()].map((b) => b.key);
   return (
     "Trascrivi le domande visibili nella schermata, SENZA rispondere. " +
     "La schermata può mostrare solo una parte di un contenuto più lungo che viene scrollato. " +
@@ -183,11 +185,13 @@ function extractPrompt() {
     'Per ogni blocco restituisci "key", un identificativo stabile (solo il numero della domanda se presente, es. "3", altrimenti le prime 6 parole del blocco), ' +
     'e "question", la trascrizione fedele e completa di domanda e opzioni (con le loro lettere). ' +
     "Preserva formule e notazione matematica in LaTeX inline ($...$): esponenti, pedici, frazioni, radici, vettori, matrici, simboli greci e operatori. " +
+    "Trascrivi ESATTAMENTE ciò che vedi, senza correggere, completare o semplificare nulla, anche se ti sembra un errore. " +
+    "Per vettori e matrici conta righe e colonne e trascrivi ogni elemento nell'ordine, riga per riga, con il suo segno; ricontrolla ogni numero sull'immagine. " +
+    "Includi tutte le opzioni di risposta; se non hanno lettera, etichettale A, B, C… nell'ordine in cui appaiono. " +
     "Una domanda composta da più parti (es. un risultato da calcolare o un'opzione da scegliere, seguiti da un campo di testo come \"Come sei giunto al risultato?\" o \"Quali teoremi hai applicato?\", oppure sotto-punti a, b, c) è UN SOLO blocco: " +
     "trascrivi tutte le parti nell'ordine, ciascuna su una riga che inizia con \"Parte 1:\", \"Parte 2:\"… e indica se è a risposta chiusa o aperta. " +
     "Campi o richieste senza numero proprio appartengono alla domanda numerata che li precede; se quella parte non è visibile per intero, ignora il blocco. " +
-    'Se una domanda con numero proprio fa riferimento esplicito a un\'altra (es. "riferendoti alla domanda 3"), metti in "dependsOn" la key di quella domanda, altrimenti stringa vuota.' +
-    (seen.length ? `\nBlocchi già trascritti, da NON includere: ${seen.join(" | ")}` : "")
+    'Se una domanda con numero proprio fa riferimento esplicito a un\'altra (es. "riferendoti alla domanda 3"), metti in "dependsOn" la key di quella domanda, altrimenti stringa vuota.'
   );
 }
 
@@ -195,13 +199,26 @@ function extractPrompt() {
 const ANSWER_RULES =
   "Se la domanda ha più parti, rispondi a TUTTE nell'ordine, etichettandole come nella domanda (Parte 1, Parte 2…). " +
   "Le parti aperte devono essere coerenti con le risposte chiuse: se chiedono come sei giunto al risultato o quali teoremi hai applicato, " +
-  "descrivi il procedimento che porta proprio a quel risultato, citando teoremi e formule usati.";
+  "descrivi il procedimento che porta proprio a quel risultato, citando teoremi e formule usati. " +
+  "Ricevi l'immagine della schermata e la trascrizione della domanda: la trascrizione può contenere errori di lettura, in caso di differenze fa fede l'immagine. " +
+  "Rispondi solo alla domanda indicata, anche se l'immagine ne mostra altre. Prima di rispondere ricontrolla sull'immagine ogni numero, segno ed elemento di vettori e matrici. " +
+  "Inizia con una riga \"Risposta: \" seguita dall'opzione scelta (lettera e testo completo), poi la motivazione. " +
+  "Per una domanda a scelta multipla verifica l'opzione scelta (es. sostituendola nel problema). Se nessuna opzione torna, ricontrolla lettura e calcoli; " +
+  "se ancora non torna scrivi \"Risposta: incerta\" e spiega il dubbio in una riga, senza inventare ipotesi e senza modificare la domanda. " +
+  "La risposta viene mostrata come testo semplice in cui le formule sono renderizzate con KaTeX (auto-render): niente Markdown (niente **, #, elenchi con * o -). " +
+  "Se la domanda contiene formule o notazione matematica, scrivi OGNI formula, simbolo, vettore, matrice, insieme o relazione in LaTeX compatibile con KaTeX, " +
+  "inline tra $...$ o su riga propria tra $$...$$; ogni $ aperto va chiuso nella stessa riga, mai $ annidati, mai frasi dentro $...$ (per parole in una formula usa \\text{...}). " +
+  "Usa solo comandi supportati da KaTeX (es. \\frac, \\sqrt, \\begin{pmatrix}...\\end{pmatrix}, \\mathbb{R}, \\text{Span}, \\neq, \\leq, \\Rightarrow, \\cdot); " +
+  "niente simboli matematici Unicode (≠, ≤, →, ², √) fuori dalle formule e niente ambienti non supportati. " +
+  "Quando indichi la risposta scelta riporta l'opzione completa (lettera e formula), senza abbreviarla.";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
 
+app.use("/katex", express.static(path.join(ROOT, "node_modules", "katex", "dist")));
 app.get("/", (req, res) => res.sendFile(path.join(ROOT, "public", "capture.html")));
 app.get("/output", (req, res) => res.sendFile(path.join(ROOT, "public", "output.html")));
+app.get("/screen", (req, res) => res.sendFile(path.join(ROOT, "public", "screen.html")));
 app.get("/voice", (req, res) => res.sendFile(path.join(ROOT, "public", "voice.html")));
 app.get("/admin", requireAuth, (req, res) => res.sendFile(path.join(ROOT, "public", "admin.html")));
 
@@ -373,7 +390,10 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
     const fresh = [];
     for (const b of JSON.parse(extracted.text).blocks) {
       const k = normKey(b.key);
-      if (!k || blocks.has(k)) continue;
+      if (!k) continue;
+      // stessa domanda con lo stesso testo: risposta già valida. Testo cambiato (es. opzioni prima mancanti): si sovrascrive.
+      const old = blocks.get(k);
+      if (old && sameText(old.question, b.question)) continue;
       const block = { key: b.key, question: b.question, dependsOn: b.dependsOn || "", answer: null, ts: result.ts };
       blocks.set(k, block);
       fresh.push(block);
@@ -389,7 +409,7 @@ app.post("/api/frame", requireLoopback, async (req, res) => {
       if (dep && dep.key.localeCompare(block.key, "it", { numeric: true }) < 0) await pending.get(normKey(dep.key));
       const context = dep?.answer ? `Domanda collegata (${dep.key}):\n${dep.question}\nRisposta già data:\n${dep.answer}\n\n` : "";
       try {
-        const r = track(await callLLM({ system: config.systemPrompt, text: `${config.defaultPrompt}\n\n${ANSWER_RULES}\n\n${context}Domanda:\n${block.question}`, maxTokens: config.maxTokens }));
+        const r = track(await callLLM({ system: config.systemPrompt, image, text: `${config.defaultPrompt}\n\n${ANSWER_RULES}\n\n${context}Domanda (trascrizione):\n${block.question}`, maxTokens: config.maxTokens }));
         block.answer = r.text;
         block.model = r.model;
       } catch (err) {

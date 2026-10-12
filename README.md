@@ -6,6 +6,7 @@ Cattura su Mac lo stream di una capture card HDMI, lo mostra a schermo e, quando
 |---|---|---|
 | Capture + Output | `http://localhost:3000/` | Anteprima, controlli a hover e tabella domande/risposte |
 | Output | `http://<nome-mac>.local:3000/output` | Output dell'AI, aggiornato a ogni elaborazione |
+| Screen | `http://localhost:3000/screen` | Stream della capture card a tutta pagina (doppio clic: schermo intero) |
 | Voce | `http://localhost:3000/voice` | Assistente vocale: ascolta l'audio e risponde subito alle domande orali |
 | Admin | `http://localhost:3000/admin` | Prompt e parametri (protetta da password) |
 

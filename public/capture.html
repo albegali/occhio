@@ -4,10 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HDMI Vision</title>
+<link rel="stylesheet" href="/katex/katex.min.css">
+<script src="/katex/katex.min.js"></script>
+<script src="/katex/contrib/auto-render.min.js"></script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: #0b0b0d; color: #e8e8ea; font-family: -apple-system, system-ui, sans-serif; }
+  html, body { margin: 0; height: 100%; overflow-x: hidden; background: #0b0b0d; color: #e8e8ea; font-family: -apple-system, system-ui, sans-serif; }
   #app { display: flex; height: 100%; gap: 16px; padding: 16px; }
   #side { width: 260px; flex: none; display: flex; flex-direction: column; gap: 10px; }
   #preview { width: 100%; aspect-ratio: 16 / 9; background: #000; border: 2px solid #3a3a3f; border-radius: 8px; overflow: hidden; }
@@ -28,12 +31,14 @@
   #status.idle { background: #2a2a2e; color: #9a9aa0; }
   #tokens { font-size: 13px; color: #9a9aa0; text-align: center; }
   #main { flex: 1; min-width: 0; overflow-y: auto; border: 1px solid #2a2a2e; border-radius: 12px; }
-  table { width: 100%; border-collapse: collapse; }
-  td { width: 50%; vertical-align: top; padding: 18px 22px; border-bottom: 1px solid #2a2a2e; font-size: 1.6rem; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  td { vertical-align: top; padding: 18px 22px; border-bottom: 1px solid #2a2a2e; font-size: 1.6rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+  td:first-child { width: 22%; }
   td + td { border-left: 1px solid #2a2a2e; }
   tr.error td { color: #e09b9b; }
   #empty { color: #6a6a70; font-style: italic; font-size: 1.4rem; padding: 22px; }
   #live { font-size: 12px; color: #9a9aa0; text-align: center; }
+  .katex-display { margin: 0.4em 0; overflow-x: auto; overflow-y: hidden; }
 </style>
 </head>
 <body>
@@ -107,7 +112,13 @@
       if (na !== nb) return na ? -1 : 1; // chiavi non numeriche in coda
       return a.localeCompare(b, "it", { numeric: true });
     };
-    const short = (s, n = 80) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
+    const MATH = { delimiters: [{ left: "$$", right: "$$", display: true }, { left: "$", right: "$", display: false }, { left: "\\[", right: "\\]", display: true }, { left: "\\(", right: "\\)", display: false }], throwOnError: false };
+    // Testo + formule LaTeX renderizzate con KaTeX (se caricato)
+    function setMath(el, text) {
+      el.textContent = text.replace(/\*\*/g, ""); // eventuale grassetto Markdown sfuggito al prompt
+      if (window.renderMathInElement) renderMathInElement(el, MATH);
+    }
+    const short = (s, n = 30) => (s.length > n ? s.slice(0, n).trimEnd() + "…" : s);
 
     function makeRow() {
       document.getElementById("empty")?.remove();
@@ -128,7 +139,8 @@
       const [c1, c2] = tr.children;
       c1.textContent = `Domanda ${b.key} (${short(b.question)})`;
       c1.title = b.question;
-      c2.textContent = b.error ? "Errore: " + b.error : b.answer ?? "…";
+      if (b.error) c2.textContent = "Errore: " + b.error;
+      else setMath(c2, b.answer ?? "…");
       tr.className = b.error ? "error" : "";
     }
 
@@ -221,7 +233,7 @@
         if (res.status === 409) return setStatus("progress", "elaborazione già in corso");
         const data = await res.json();
         if (data.error) return setStatus("error", "errore: " + data.error);
-        setStatus("ok", (data.duplicate ? "ok (nessuna domanda nuova)" : "ok") + (data.fallback ? ` · fallback ${data.model}` : ""));
+        setStatus("ok", (data.duplicate ? "ok (nessuna domanda nuova o cambiata)" : "ok") + (data.fallback ? ` · fallback ${data.model}` : ""));
         if (data.usage) tokensEl.textContent = `token: in ${data.usage.input_tokens} / out ${data.usage.output_tokens}`;
       } catch (e) {
         setStatus("error", "errore di rete");
