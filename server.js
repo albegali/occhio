@@ -273,10 +273,12 @@ const VOICE_SYSTEM =
   "Ascolti in tempo reale una conversazione orale (es. un'interrogazione, un esame orale o un colloquio), trascritta automaticamente: " +
   "la trascrizione può contenere errori, interpretala nel senso più plausibile. " +
   "Quando viene posta una domanda rispondi in italiano, subito e in modo diretto: prima la risposta in una frase, poi al massimo 2-3 frasi di dettaglio utili da dire a voce. " +
+  "Le domande possono riferirsi a quelle precedenti (es. \"e nel caso opposto?\", \"perché?\"): usa le domande e risposte già date per interpretarle e resta coerente con esse. " +
   "Niente preamboli, niente Markdown; formule in notazione testuale semplice.";
 const SKIP = "[SKIP]";
 const voiceTurns = []; // ultime frasi trascritte, usate come contesto
 const voiceAnswers = []; // ultime 20 risposte, reinviate a chi si collega
+const voiceHistory = []; // domande e risposte della sessione di ascolto, usate come contesto
 
 function pushVoice(v) {
   voiceAnswers.push(v);
@@ -297,6 +299,7 @@ app.get("/api/voice/token", requireLoopback, async (req, res) => {
 
 app.post("/api/voice/reset", requireLoopback, (req, res) => {
   voiceTurns.length = 0;
+  voiceHistory.length = 0;
   res.status(204).end();
 });
 
@@ -305,6 +308,7 @@ app.post("/api/voice/turn", requireLoopback, async (req, res) => {
   const text = String(req.body?.text || "").trim();
   if (!text) return res.status(400).send("Campo text mancante");
   const context = voiceTurns.slice(-6).join("\n");
+  const history = voiceHistory.slice(-10).map((h, i) => `D${i + 1}: ${h.question}\nR${i + 1}: ${h.answer}`).join("\n\n");
   voiceTurns.push(text);
   if (voiceTurns.length > 20) voiceTurns.shift();
   res.status(202).end();
@@ -312,6 +316,7 @@ app.post("/api/voice/turn", requireLoopback, async (req, res) => {
   const startedAt = Date.now();
   const item = { id: `${startedAt}-${Math.random().toString(36).slice(2, 6)}`, ts: new Date().toISOString(), question: text, answer: "", done: false, model: config.model };
   const prompt =
+    (history ? `Domande e risposte precedenti della sessione:\n${history}\n\n` : "") +
     (context ? `Frasi precedenti della conversazione:\n${context}\n\n` : "") +
     `Ultima frase trascritta:\n"${text}"\n\n` +
     "Se l'ULTIMA frase contiene una domanda nuova (o completa una domanda iniziata nelle frasi precedenti), rispondi. " +
@@ -364,6 +369,10 @@ app.post("/api/voice/turn", requireLoopback, async (req, res) => {
   item.done = true;
   const skipped = item.answer.trim().startsWith(SKIP) && !item.error;
   if (!skipped) emit();
+  if (!skipped && !item.error) {
+    voiceHistory.push({ question: text, answer: item.answer.trim() });
+    if (voiceHistory.length > 20) voiceHistory.shift();
+  }
   console.log(`voce ts=${item.ts} durata=${Date.now() - startedAt}ms in=${usage.input_tokens} out=${usage.output_tokens} ${skipped ? "nessuna domanda" : item.error ? `ERRORE: ${item.error}` : "risposta"}`);
 });
 

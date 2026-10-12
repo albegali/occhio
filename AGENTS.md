@@ -65,7 +65,7 @@ Variabili d'ambiente (`.env`): `ANTHROPIC_API_KEY` (obbligatoria), `ADMIN_PASSWO
 | GET | `/voice` | pubblico | `voice.html`: assistente vocale |
 | GET | `/api/voice/token` | **solo loopback** | token temporaneo AssemblyAI (60 s) per il WebSocket di streaming |
 | POST | `/api/voice/turn` | **solo loopback** | body `{ text }` (frase conclusa) → `202`; Claude risponde in streaming via evento SSE `voice` se c'è una domanda |
-| POST | `/api/voice/reset` | **solo loopback** | svuota il contesto delle frasi (chiamato a ogni "Avvia ascolto") |
+| POST | `/api/voice/reset` | **solo loopback** | svuota il contesto (frasi e domande/risposte precedenti; chiamato a ogni "Avvia ascolto") |
 | GET | `/api/latest` | pubblico | ultimo risultato (o `null`) |
 | GET | `/api/config` | Basic Auth | config completa |
 | PUT | `/api/config` | Basic Auth | aggiorna e salva `config.json`, invia evento SSE `config` |
